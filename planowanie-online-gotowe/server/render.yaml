@@ -1,7 +1,0 @@
-services:
-  - type: web
-    name: planowanie-server
-    runtime: node
-    rootDir: server
-    buildCommand: npm install
-    startCommand: npm start
