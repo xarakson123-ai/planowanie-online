@@ -1,19 +1,17 @@
-# Planowanie Online — Netlify + Render
+# Planowanie Online v2
 
-## 1. Serwer multiplayer na Render
-1. Wrzuć repozytorium projektu na GitHub.
-2. Na Render wybierz New → Web Service i wskaż repozytorium.
-3. Root Directory: `server`
-4. Build Command: `npm install`
-5. Start Command: `npm start`
-6. Po wdrożeniu skopiuj adres HTTPS, np. `https://planowanie-server.onrender.com`
+## Nowe zasady
+- Pełna talia 52 kart.
+- Cała liczba kart w ręce jest rozdzielana równo według wariantu: 2 graczy = 26 lew, 3 = 16 lew, 4 = 13 lew.
+- Każda kolejna runda ma o jedną kartę mniej, aż do 1.
+- Przed każdą rundą odsłaniany jest jeden atut.
+- Deklaracje są składane po kolei; suma deklaracji nie może być równa liczbie kart (hak).
+- Obowiązkowe dokładanie do koloru.
+- Najwyższy atut wygrywa lewę; bez atutu wygrywa najwyższa karta koloru wyjścia.
+- Trafiona deklaracja: 10 + liczba wygranych lew. Nietrafiona: 0.
+- Panel „Kartka wyników” przypomina fizyczną kartkę, na której zapisujemy deklaracje, liczbę kart, lewy i punkty.
 
-## 2. Strona na Netlify
-1. W folderze `frontend/config.js` wpisz:
-   `window.PLANOWANIE_SERVER = "https://TWÓJ-SERWER.onrender.com";`
-2. W Netlify wybierz Add new site → Deploy manually albo połącz repozytorium.
-3. Publish directory: `frontend`
-4. Otwórz domenę Netlify.
-
-## 3. Gra
-Gracze wchodzą na stronę Netlify, jedna osoba tworzy pokój, pozostali wpisują kod. Maksymalnie 4 osoby.
+## Wdrożenie
+Server: Render, root `server`, `npm install`, `npm start`.
+Frontend: Netlify, publish directory `frontend`.
+Po wdrożeniu Render wpisz jego adres do `frontend/config.js` jako `window.PLANOWANIE_SERVER`.
