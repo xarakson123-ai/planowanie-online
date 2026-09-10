@@ -42,10 +42,10 @@ function advanceDeclarer(room){const next=room.players.find(pl=>pl.decl===null);
 function declarationLegal(room,pid,n){const pl=p(room,pid);if(!pl||room.phase!=='declaration'||room.currentDeclarer!==pid)return false;if(!Number.isInteger(n)||n<0||n>room.handSize)return false;const sumOthers=room.players.filter(x=>x.id!==pid).reduce((s,x)=>s+(x.decl??0),0);return sumOthers+n!==room.handSize;}
 function play(room,pid,card){
   const pl=p(room,pid); if(!pl||room.phase!=='play'||room.currentPlayer!==pid)return 'Nie jest teraz Twoja kolej.';
-  const idx=pl.hand.findIndex(c=>(card?.id && c.id===card.id)||(!card?.id&&c.s===card?.s&&c.r===card?.r)); if(idx<0)return 'Nie masz tej karty.';
+  let idx=pl.hand.findIndex(c=>card?.id&&c.id===card.id); if(idx<0) idx=pl.hand.findIndex(c=>c.s===card?.s&&c.r===card?.r); if(idx<0)return 'Nie masz tej karty.'; const playedCard=pl.hand[idx];
   const lead=room.trick[0]?.card.s;
   if(lead && pl.hand.some(c=>c.s===lead) && card.s!==lead)return 'Musisz dołożyć do koloru.';
-  pl.hand.splice(idx,1); room.trick.push({player:pid,card});
+  pl.hand.splice(idx,1); room.trick.push({player:pid,card:playedCard});
   if(room.trick.length<room.players.length){room.currentPlayer=orderNext(room,pid);send(room);return null;}
   const winId=trickWinner(room);p(room,winId).won++;room.currentPlayer=winId;room.trick=[];
   if(room.players.every(x=>x.hand.length===0))finishRound(room); else send(room);
