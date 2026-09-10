@@ -14,9 +14,9 @@ const suitColor=s=>s==='♥'||s==='♦'?'red':'black';
 const value=r=>RANKS.indexOf(r);
 
 function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
-function makeDeck(){return SUITS.flatMap(s=>RANKS.map(r=>({s,r})));}
+function makeDeck(){return SUITS.flatMap(s=>RANKS.map(r=>({id:crypto.randomUUID(),s,r})));}
 function newCode(){let c;do c=crypto.randomBytes(3).toString('hex').toUpperCase();while(rooms.has(c));return c;}
-function maxHandSize(n){return n===2?26:n===3?16:n===4?13:0;}
+function maxHandSize(n){return n===2?24:n===3?16:n===4?12:0;}
 function publicRoom(room){return {
   code:room.code, phase:room.phase, round:room.round, maxRounds:room.maxRounds, handSize:room.handSize,
   trump:room.trump, currentPlayer:room.currentPlayer, currentDeclarer:room.currentDeclarer,
@@ -42,7 +42,7 @@ function advanceDeclarer(room){const next=room.players.find(pl=>pl.decl===null);
 function declarationLegal(room,pid,n){const pl=p(room,pid);if(!pl||room.phase!=='declaration'||room.currentDeclarer!==pid)return false;if(!Number.isInteger(n)||n<0||n>room.handSize)return false;const sumOthers=room.players.filter(x=>x.id!==pid).reduce((s,x)=>s+(x.decl??0),0);return sumOthers+n!==room.handSize;}
 function play(room,pid,card){
   const pl=p(room,pid); if(!pl||room.phase!=='play'||room.currentPlayer!==pid)return 'Nie jest teraz Twoja kolej.';
-  const idx=pl.hand.findIndex(c=>c.s===card?.s&&c.r===card?.r); if(idx<0)return 'Nie masz tej karty.';
+  const idx=pl.hand.findIndex(c=>(card?.id && c.id===card.id)||(!card?.id&&c.s===card?.s&&c.r===card?.r)); if(idx<0)return 'Nie masz tej karty.';
   const lead=room.trick[0]?.card.s;
   if(lead && pl.hand.some(c=>c.s===lead) && card.s!==lead)return 'Musisz dołożyć do koloru.';
   pl.hand.splice(idx,1); room.trick.push({player:pid,card});
