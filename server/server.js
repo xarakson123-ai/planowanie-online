@@ -8,7 +8,30 @@ const { Pool } = require('pg');
 const app = express();
 const server = http.createServer(app);
 
+/* =========================
+   HTTP / CORS
+========================= */
+
 app.use(express.json({ limit: '20kb' }));
+
+// Frontend jest na GitHub Pages, a API na Renderze.
+// Bez tego przeglądarka blokuje POST /api/register i /api/login
+// na etapie preflight (OPTIONS), co kończy się komunikatem
+// "Failed to fetch" w przeglądarce.
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
 
 const io = new Server(server, {
   cors: {
@@ -594,55 +617,78 @@ function startRound(room) {
   send(room);
 }
 
-function advanceDeclarer(room) {
-  const next = room.players.find(
-    pl => pl.decl === null
+function declarationSum(room) {
+  return room.players.reduce(
+    (sum, p) => sum + (p.decl ?? 0),
+    0
   );
+}
 
-  if (next) {
-    room.currentDeclarer = next.id;
-    send(room);
-    return;
-  }
+function declarationDone(room) {
+  return room.players.every(
+    p => p.decl !== null
+  );
+}
 
+function startPlay(room) {
   room.phase = 'play';
-
   room.currentPlayer =
     room.players[
       (room.dealerIndex + 1) %
       room.players.length
     ].id;
-
   send(room);
 }
 
-function declarationLegal(room, playerId, n) {
+function declare(room, playerId, amount) {
   const pl = findPlayer(room, playerId);
 
-  if (
-    !pl ||
-    room.phase !== 'declaration' ||
-    room.currentDeclarer !== playerId
-  ) {
-    return false;
+  if (!pl) return 'Gracz nie istnieje.';
+
+  if (room.phase !== 'declaration') {
+    return 'Nie trwa deklarowanie.';
   }
 
-  if (
-    !Number.isInteger(n) ||
-    n < 0 ||
-    n > room.handSize
-  ) {
-    return false;
+  if (room.currentDeclarer !== playerId) {
+    return 'Teraz deklaruje inny gracz.';
   }
 
-  const sumOthers = room.players
+  const n = Number(amount);
+
+  if (!Number.isInteger(n) || n < 0 || n > room.handSize) {
+    return 'Nieprawidłowa deklaracja.';
+  }
+
+  const others = room.players
     .filter(x => x.id !== playerId)
-    .reduce(
-      (s, x) => s + (x.decl ?? 0),
-      0
-    );
+    .reduce((sum, x) => sum + (x.decl ?? 0), 0);
 
-  return sumOthers + n !== room.handSize;
+  if (
+    room.players.length > 1 &&
+    declarationSum(room) - (pl.decl ?? 0) + n === room.handSize &&
+    room.players.some(x => x.id !== playerId && x.decl === null)
+  ) {
+    return 'Nie można teraz domknąć sumy deklaracji.';
+  }
+
+  pl.decl = n;
+
+  const i = room.players.findIndex(
+    x => x.id === playerId
+  );
+
+  room.currentDeclarer =
+    room.players[
+      (i + 1) % room.players.length
+    ].id;
+
+  if (declarationDone(room)) {
+    startPlay(room);
+  } else {
+    send(room);
+  }
+
+  return null;
 }
 
 function play(room, playerId, card) {
@@ -761,30 +807,24 @@ function finishRound(room) {
     pl.roundPoints =
       pl.won === pl.decl
         ? 10 + pl.won
-        : 0;
+        : -Math.abs(pl.decl - pl.won) * 10;
 
     pl.score += pl.roundPoints;
   }
 
-  room.phase =
-    room.round === room.maxRounds
-      ? 'finished'
-      : 'roundEnd';
-
+  room.phase = 'roundEnd';
   send(room);
 
-  if (room.phase === 'roundEnd') {
-    setTimeout(() => {
-      if (!rooms.has(room.code)) return;
+  setTimeout(() => {
+    if (!rooms.has(room.code)) return;
 
-      room.round++;
-      room.dealerIndex =
-        (room.dealerIndex + 1) %
-        room.players.length;
+    room.round++;
+    room.dealerIndex =
+      (room.dealerIndex + 1) %
+      room.players.length;
 
-      startRound(room);
-    }, 1800);
-  }
+    startRound(room);
+  }, 1800);
 }
 
 function createPlayer(name, token, avatar) {
@@ -907,30 +947,21 @@ io.on('connection', socket => {
   socket.on(
     'joinRoom',
     ({ code, name, token, avatar } = {}) => {
-
       const roomCode =
         String(code || '')
           .trim()
           .toUpperCase();
 
-      const room =
-        rooms.get(roomCode);
-
       const stableToken =
         cleanToken(token) ||
         crypto.randomUUID();
+
+      const room = rooms.get(roomCode);
 
       if (!room) {
         return socket.emit(
           'errorMsg',
           'Nie znaleziono pokoju.'
-        );
-      }
-
-      if (room.phase !== 'lobby') {
-        return socket.emit(
-          'errorMsg',
-          'Gra już się rozpoczęła.'
         );
       }
 
@@ -941,15 +972,8 @@ io.on('connection', socket => {
         );
 
       if (existing) {
-        existing.name =
-          cleanName(
-            name || existing.name
-          );
-
-        if (avatar) {
-          existing.avatar =
-            cleanAvatar(avatar);
-        }
+        existing.name = cleanName(name);
+        existing.avatar = cleanAvatar(avatar);
 
         attachSocket(
           socket,
@@ -1043,7 +1067,7 @@ io.on('connection', socket => {
     startRound(room);
   });
 
-  socket.on('declare', n => {
+  socket.on('declare', amount => {
     const room =
       rooms.get(socket.data.room);
 
@@ -1052,30 +1076,21 @@ io.on('connection', socket => {
 
     if (!room || !playerId) return;
 
-    const bid = Number(n);
-
-    if (
-      !declarationLegal(
+    const error =
+      declare(
         room,
         playerId,
-        bid
-      )
-    ) {
-      return socket.emit(
+        amount
+      );
+
+    if (error) {
+      socket.emit(
         'errorMsg',
-        'Ta deklaracja jest niedozwolona — sprawdź zasadę haka.'
+        error
       );
+
+      send(room);
     }
-
-    const pl =
-      findPlayer(
-        room,
-        playerId
-      );
-
-    pl.decl = bid;
-
-    advanceDeclarer(room);
   });
 
   socket.on('play', card => {
