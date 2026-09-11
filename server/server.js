@@ -22,9 +22,7 @@ function publicRoom(room){return {
   code:room.code, phase:room.phase, round:room.round, maxRounds:room.maxRounds, handSize:room.handSize,
   trump:room.trump, currentPlayer:room.currentPlayer, currentDeclarer:room.currentDeclarer,
   trick:room.trick.map(t=>({player:t.player,card:t.card})),
-  players:room.players.map(p=>({id:p.id,name:p.name,score:p.score,decl:p.decl,won:p.won,roundPoints:p.roundPoints,connected:p.connected})),
-  canDeclare: pid===room.currentDeclarer,
-  canPlay: pid===room.currentPlayer
+  players:room.players.map(p=>({id:p.id,name:p.name,score:p.score,decl:p.decl,won:p.won,roundPoints:p.roundPoints,connected:p.connected}))
 };}
 function stateFor(room,pid){const p=room.players.find(x=>x.id===pid);return {room:publicRoom(room),myId:pid,hand:p?.hand||[]};}
 function send(room){for(const p of room.players){if(p.connected)io.to(p.socketRoom).emit('state',stateFor(room,p.id));}}
@@ -77,7 +75,7 @@ io.on('connection',socket=>{
     room.players.push(pl);socket.data.room=room.code;socket.join(pl.socketRoom);send(room);
   });
   socket.on('startGame',()=>{const room=rooms.get(socket.data.room);if(!room)return;if(room.players[0]?.id!==socket.id)return socket.emit('errorMsg','Tylko twórca pokoju może rozpocząć.');if(room.players.length<2)return socket.emit('errorMsg','Potrzeba co najmniej 2 graczy.');room.maxRounds=maxHandSize(room.players.length);room.round=1;room.dealerIndex=0;room.players.forEach(x=>x.score=0);startRound(room);});
-  socket.on('declare',n=>{const room=rooms.get(socket.data.room);if(!room)return;const num=Number(n);if(room.phase!=='declaration'||room.currentDeclarer!==socket.id)return socket.emit('errorMsg','Teraz deklaruje inny gracz.');if(!declarationLegal(room,socket.id,num))return socket.emit('errorMsg','Ta deklaracja jest niedozwolona — działa zasada haka.');p(room,socket.id).decl=num;advanceDeclarer(room);});
+  socket.on('declare',n=>{const room=rooms.get(socket.data.room);if(!room)return;if(!declarationLegal(room,socket.id,Number(n)))return socket.emit('errorMsg','Ta deklaracja jest niedozwolona — sprawdź zasadę haka.');p(room,socket.id).decl=Number(n);advanceDeclarer(room);});
   socket.on('play',card=>{const room=rooms.get(socket.data.room);if(!room)return;const e=play(room,socket.id,card);if(e)socket.emit('errorMsg',e);});
   socket.on('disconnect',()=>{const room=rooms.get(socket.data.room);if(!room)return;const pl=p(room,socket.id);if(pl)pl.connected=false;if(room.phase==='lobby')room.players=room.players.filter(x=>x.id!==socket.id);if(room.players.length===0)rooms.delete(room.code);else send(room);});
 });
