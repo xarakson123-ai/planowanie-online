@@ -63,19 +63,23 @@ function finishRound(room){for(const pl of room.players){pl.roundPoints=pl.won==
 }
 
 io.on('connection',socket=>{
-  socket.on('createRoom',({name})=>{
+  socket.on('createRoom',({name,token})=>{
+    const argumentsToken=token;
     const code=newCode();const room={code,players:[],phase:'lobby',round:1,maxRounds:0,handSize:0,trump:null,currentPlayer:null,currentDeclarer:null,dealerIndex:0,deck:[],trick:[]};
-    const pl={id:crypto.randomUUID(),socketId:socket.id,name:String(name||'Gracz').trim().slice(0,18)||'Gracz',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:true,socketRoom:`room:${code}`};
+    const playerId=String(argumentsToken||'').trim()||crypto.randomUUID(); const pl={id:playerId,socketId:socket.id,name:String(name||'Gracz').trim().slice(0,18)||'Gracz',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:true,socketRoom:`room:${code}`};
     room.players.push(pl);rooms.set(code,room);socket.data.room=code;socket.data.playerId=pl.id;socket.join(pl.socketRoom);socket.emit('roomCreated',code);send(room);
   });
-  socket.on('joinRoom',({code,name})=>{
+  socket.on('joinRoom',({code,name,token})=>{
+    const argumentsToken=token;
     const room=rooms.get(String(code||'').trim().toUpperCase());if(!room)return socket.emit('errorMsg','Nie znaleziono pokoju.');
+    const existing=room.players.find(x=>x.id===String(token||'').trim());
+    if(existing){existing.socketId=socket.id;existing.connected=true;existing.name=String(name||existing.name||'Gracz').trim().slice(0,18)||existing.name;socket.data.room=room.code;socket.data.playerId=existing.id;socket.join(existing.socketRoom);send(room);return;}
     if(room.phase!=='lobby')return socket.emit('errorMsg','Gra już się rozpoczęła.');if(room.players.length>=4)return socket.emit('errorMsg','Pokój jest pełny — maksymalnie 4 graczy.');
-    const pl={id:crypto.randomUUID(),socketId:socket.id,name:String(name||'Gracz').trim().slice(0,18)||'Gracz',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:true,socketRoom:`room:${room.code}`};
+    const playerId=String(argumentsToken||'').trim()||crypto.randomUUID(); const pl={id:playerId,socketId:socket.id,name:String(name||'Gracz').trim().slice(0,18)||'Gracz',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:true,socketRoom:`room:${room.code}`};
     room.players.push(pl);socket.data.room=room.code;socket.data.playerId=pl.id;socket.join(pl.socketRoom);send(room);
   });
   socket.on('startGame',()=>{const room=rooms.get(socket.data.room);if(!room)return;if(room.players[0]?.id!==socket.data.playerId)return socket.emit('errorMsg','Tylko twórca pokoju może rozpocząć.');if(room.players.length<2)return socket.emit('errorMsg','Potrzeba co najmniej 2 graczy.');room.maxRounds=maxHandSize(room.players.length);room.round=1;room.dealerIndex=0;room.players.forEach(x=>x.score=0);startRound(room);});
-  socket.on('declare',n=>{const room=rooms.get(socket.data.room);if(!room)return;if(!declarationLegal(room,socket.data.playerId,Number(n)))return socket.emit('errorMsg','Ta deklaracja jest niedozwolona — sprawdź kolejność deklaracji i zasadę haka.');p(room,socket.data.playerId).decl=Number(n);advanceDeclarer(room);});
+  socket.on('declare',n=>{const room=rooms.get(socket.data.room);if(!room)return;if(!declarationLegal(room,socket.data.playerId,Number(n)))return socket.emit('errorMsg','Ta deklaracja jest niedozwolona — sprawdź zasadę haka.');p(room,socket.data.playerId).decl=Number(n);advanceDeclarer(room);});
   socket.on('play',card=>{const room=rooms.get(socket.data.room);if(!room)return;const e=play(room,socket.data.playerId,card);if(e)socket.emit('errorMsg',e);});
   socket.on('disconnect',()=>{const room=rooms.get(socket.data.room);if(!room)return;const pl=p(room,socket.data.playerId);if(pl)pl.connected=false;if(room.phase==='lobby')room.players=room.players.filter(x=>x.id!==socket.data.playerId);if(room.players.length===0)rooms.delete(room.code);else send(room);});
 });
