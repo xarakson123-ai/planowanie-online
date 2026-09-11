@@ -62,21 +62,97 @@ function finishRound(room){for(const pl of room.players){pl.roundPoints=pl.won==
   if(room.phase==='roundEnd')setTimeout(()=>{if(!rooms.has(room.code))return;room.round++;room.dealerIndex=(room.dealerIndex+1)%room.players.length;startRound(room);},1800);
 }
 
+function cleanToken(token){
+  const t=String(token||'').trim();
+  return t.slice(0,120);
+}
+function findPlayerByToken(token){
+  const t=cleanToken(token);
+  if(!t)return null;
+  for(const room of rooms.values()){
+    const player=room.players.find(x=>x.token===t);
+    if(player)return {room,player};
+  }
+  return null;
+}
+function attachSocket(socket,room,player){
+  socket.data.room=room.code;
+  socket.data.playerId=player.id;
+  player.connected=true;
+  player.socketId=socket.id;
+  socket.join(player.socketRoom);
+  send(room);
+}
+
 io.on('connection',socket=>{
-  socket.on('createRoom',({name})=>{
-    const code=newCode();const room={code,players:[],phase:'lobby',round:1,maxRounds:0,handSize:0,trump:null,currentPlayer:null,currentDeclarer:null,dealerIndex:0,deck:[],trick:[]};
-    const pl={id:socket.id,name:String(name||'Gracz').trim().slice(0,18)||'Gracz',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:true,socketRoom:`room:${code}`};
-    room.players.push(pl);rooms.set(code,room);socket.data.room=code;socket.join(pl.socketRoom);socket.emit('roomCreated',code);send(room);
+  const connectionToken=cleanToken(socket.handshake.auth?.token);
+  const existing=connectionToken?findPlayerByToken(connectionToken):null;
+  if(existing){
+    attachSocket(socket,existing.room,existing.player);
+    socket.emit('roomRestored',existing.room.code);
+  }
+
+  socket.on('createRoom',({name,token})=>{
+    const t=cleanToken(token)||connectionToken||crypto.randomUUID();
+    const old=findPlayerByToken(t);
+    if(old){
+      old.player.connected=false;
+      if(old.room.phase==='lobby'){
+        old.room.players=old.room.players.filter(x=>x!==old.player);
+        if(old.room.players.length===0)rooms.delete(old.room.code);
+      }
+    }
+    const code=newCode();
+    const room={code,players:[],phase:'lobby',round:1,maxRounds:0,handSize:0,trump:null,currentPlayer:null,currentDeclarer:null,dealerIndex:0,deck:[],trick:[]};
+    const pl={id:t,token:t,socketId:socket.id,name:String(name||'Gracz').trim().slice(0,18)||'Gracz',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:true,socketRoom:`room:${code}`};
+    room.players.push(pl);rooms.set(code,room);attachSocket(socket,room,pl);socket.emit('roomCreated',code);
   });
-  socket.on('joinRoom',({code,name})=>{
-    const room=rooms.get(String(code||'').trim().toUpperCase());if(!room)return socket.emit('errorMsg','Nie znaleziono pokoju.');
-    if(room.phase!=='lobby')return socket.emit('errorMsg','Gra już się rozpoczęła.');if(room.players.length>=4)return socket.emit('errorMsg','Pokój jest pełny — maksymalnie 4 graczy.');
-    const pl={id:socket.id,name:String(name||'Gracz').trim().slice(0,18)||'Gracz',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:true,socketRoom:`room:${room.code}`};
-    room.players.push(pl);socket.data.room=room.code;socket.join(pl.socketRoom);send(room);
+
+  socket.on('joinRoom',({code,name,token})=>{
+    const room=rooms.get(String(code||'').trim().toUpperCase());
+    if(!room)return socket.emit('errorMsg','Nie znaleziono pokoju.');
+    const t=cleanToken(token)||connectionToken||crypto.randomUUID();
+    const existingInRoom=room.players.find(x=>x.token===t);
+    if(existingInRoom){
+      existingInRoom.name=String(name||existingInRoom.name||'Gracz').trim().slice(0,18)||existingInRoom.name||'Gracz';
+      attachSocket(socket,room,existingInRoom);return;
+    }
+    if(room.phase!=='lobby')return socket.emit('errorMsg','Gra już się rozpoczęła.');
+    if(room.players.length>=4)return socket.emit('errorMsg','Pokój jest pełny — maksymalnie 4 graczy.');
+    const elsewhere=findPlayerByToken(t);
+    if(elsewhere){
+      return socket.emit('errorMsg','Ten gracz jest już w innym pokoju.');
+    }
+    const pl={id:t,token:t,socketId:socket.id,name:String(name||'Gracz').trim().slice(0,18)||'Gracz',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:true,socketRoom:`room:${room.code}`};
+    room.players.push(pl);attachSocket(socket,room,pl);
   });
-  socket.on('startGame',()=>{const room=rooms.get(socket.data.room);if(!room)return;if(room.players[0]?.id!==socket.id)return socket.emit('errorMsg','Tylko twórca pokoju może rozpocząć.');if(room.players.length<2)return socket.emit('errorMsg','Potrzeba co najmniej 2 graczy.');room.maxRounds=maxHandSize(room.players.length);room.round=1;room.dealerIndex=0;room.players.forEach(x=>x.score=0);startRound(room);});
-  socket.on('declare',n=>{const room=rooms.get(socket.data.room);if(!room)return;if(!declarationLegal(room,socket.id,Number(n)))return socket.emit('errorMsg','Ta deklaracja jest niedozwolona — sprawdź zasadę haka.');p(room,socket.id).decl=Number(n);advanceDeclarer(room);});
-  socket.on('play',card=>{const room=rooms.get(socket.data.room);if(!room)return;const e=play(room,socket.id,card);if(e)socket.emit('errorMsg',e);});
-  socket.on('disconnect',()=>{const room=rooms.get(socket.data.room);if(!room)return;const pl=p(room,socket.id);if(pl)pl.connected=false;if(room.phase==='lobby')room.players=room.players.filter(x=>x.id!==socket.id);if(room.players.length===0)rooms.delete(room.code);else send(room);});
+
+  socket.on('startGame',()=>{
+    const room=rooms.get(socket.data.room);if(!room)return;
+    const pid=socket.data.playerId;
+    if(room.players[0]?.id!==pid)return socket.emit('errorMsg','Tylko twórca pokoju może rozpocząć.');
+    if(room.players.length<2)return socket.emit('errorMsg','Potrzeba co najmniej 2 graczy.');
+    room.maxRounds=maxHandSize(room.players.length);room.round=1;room.dealerIndex=0;room.players.forEach(x=>{x.score=0;x.won=0;x.decl=null;});startRound(room);
+  });
+
+  socket.on('declare',n=>{
+    const room=rooms.get(socket.data.room);if(!room)return;
+    const pid=socket.data.playerId;
+    if(!declarationLegal(room,pid,Number(n)))return socket.emit('errorMsg','Ta deklaracja jest niedozwolona — sprawdź zasadę haka.');
+    p(room,pid).decl=Number(n);advanceDeclarer(room);
+  });
+
+  socket.on('play',card=>{
+    const room=rooms.get(socket.data.room);if(!room)return;
+    const e=play(room,socket.data.playerId,card);if(e)socket.emit('errorMsg',e);
+  });
+
+  socket.on('disconnect',()=>{
+    const room=rooms.get(socket.data.room);if(!room)return;
+    const pl=p(room,socket.data.playerId);
+    if(!pl)return;
+    // Only mark offline if this is still the player's current socket.
+    if(pl.socketId===socket.id){pl.connected=false;pl.socketId=null;send(room);}
+  });
 });
 const PORT=process.env.PORT||3000;server.listen(PORT,()=>console.log(`Planowanie server listening on ${PORT}`));
