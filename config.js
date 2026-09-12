@@ -1,4 +1,8 @@
 window.PLANOWANIE_SERVER='https://planowanie-server.onrender.com';
+/* GitHub Pages: jeśli CDN Socket.IO nie załaduje klienta, pobierz go bezpośrednio z Render. document.write jest tutaj celowe — config.js jest ładowany przez parser HTML przed głównym skryptem gry. */
+if(typeof window.io!=='function'){
+  document.write('<script src="https://planowanie-server.onrender.com/socket.io/socket.io.js"><\/script>');
+}
 (function(){
   const realIO=window.io;
   if(typeof realIO==='function'){
