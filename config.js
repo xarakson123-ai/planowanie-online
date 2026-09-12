@@ -1,5 +1,19 @@
 window.PLANOWANIE_SERVER='https://planowanie-server.onrender.com';
 (function(){
+  const realIO=window.io;
+  if(typeof realIO==='function'){
+    window.io=function(url,opts){
+      const s=realIO(url,{...(opts||{}),transports:['polling'],upgrade:false,reconnection:true,reconnectionAttempts:Infinity,reconnectionDelay:1000,reconnectionDelayMax:5000,timeout:12000});
+      window.planowanieSocket=s;
+      s.on('connect',()=>{window.__planowanieConnected=true;});
+      s.on('connect_error',e=>{window.__planowanieSocketError=e&&e.message?e.message:String(e||'Błąd połączenia');console.error('Planowanie Socket.IO:',e);});
+      return s;
+    };
+  }else{
+    window.__planowanieSocketError='Nie załadował się klient Socket.IO.';
+  }
+})();
+(function(){
 const S=window.PLANOWANIE_SERVER,K='planowanieAuthToken',A=['😀','😎','🤠','🥶','😈','👑','🦊','🐺','🐼','🐸','🤖','👽','🎩','🃏','♠️','🔥'];let u=null,sel='😀';
 const $=x=>document.getElementById(x),tok=()=>localStorage.getItem(K)||'';
 async function api(p,o={}){let h={'Content-Type':'application/json',...(o.headers||{})},t=tok();if(t)h.Authorization='Bearer '+t;let r=await fetch(S+p,{...o,headers:h}),d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.error||'Błąd serwera.');return d}
