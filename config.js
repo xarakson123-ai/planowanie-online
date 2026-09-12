@@ -9,8 +9,9 @@ if(typeof window.io!=='function'){
     window.io=function(url,opts){
       const s=realIO(url,{...(opts||{}),transports:['polling'],upgrade:false,reconnection:true,reconnectionAttempts:Infinity,reconnectionDelay:1000,reconnectionDelayMax:5000,timeout:12000});
       window.planowanieSocket=s;
-      s.on('connect',()=>{window.__planowanieConnected=true;});
-      s.on('connect_error',e=>{window.__planowanieSocketError=e&&e.message?e.message:String(e||'Błąd połączenia');console.error('Planowanie Socket.IO:',e);});
+      s.on('connect',()=>{window.__planowanieConnected=true;window.__planowanieSocketError='';});
+      s.on('connect_error',e=>{window.__planowanieConnected=false;window.__planowanieSocketError=e&&e.message?e.message:String(e||'Błąd połączenia');console.error('Planowanie Socket.IO:',e);});
+      s.on('disconnect',()=>{window.__planowanieConnected=false;});
       return s;
     };
   }else{
@@ -37,4 +38,21 @@ function build(){let h=$('home');if(!h)return;let bar=document.createElement('di
 let m=document.createElement('div');m.id='accModal';m.className='accmodal hidden';m.innerHTML='<div class="acccard" id="accAuth"><div class="top"><h2 id="accTitle">Logowanie</h2><button type="button" class="btn dark" id="accClose">Wróć</button></div><div id="accLoginForm"><div class="accfield"><label>Login</label><input id="accLoginName" autocomplete="username"></div><div class="accfield"><label>Hasło</label><input id="accLoginPass" type="password" autocomplete="current-password"></div><button type="button" class="btn" id="accLoginDo">Zaloguj</button><div id="accLoginMsg" class="accmsg"></div><p class="muted">Nie masz konta? <button type="button" class="btn dark" id="accToReg">Załóż konto</button></p></div><div id="accRegForm" class="hidden"><div class="accfield"><label>Login</label><input id="accRegName" maxlength="18" autocomplete="username"></div><div class="accfield"><label>Hasło</label><input id="accRegPass" type="password" autocomplete="new-password"></div><div class="accfield"><label>Powtórz hasło</label><input id="accRegPass2" type="password" autocomplete="new-password"></div><button type="button" class="btn" id="accRegDo">Utwórz konto</button><div id="accRegMsg" class="accmsg"></div><p class="muted">Masz już konto? <button type="button" class="btn dark" id="accToLogin">Zaloguj</button></p></div></div><div class="acccard hidden" id="accProfileCard"><div class="top"><h2>Twój profil</h2><button type="button" class="btn dark" id="accProfClose">Wróć</button></div><div class="accprof"><span class="accbig" id="accBig">😀</span><div><h3 id="accProfileName"></h3><span class="muted">Wybierz ikonę profilu</span></div></div><div class="accavs" id="accAvatars"></div><button type="button" class="btn" id="accSave">Zapisz ikonę</button><div id="accProfMsg" class="accmsg"></div></div>';document.body.appendChild(m);
 $('accLogin').onclick=()=>auth(0);$('accRegister').onclick=()=>auth(1);$('accClose').onclick=e=>{e.preventDefault();e.stopPropagation();close()};$('accProfClose').onclick=e=>{e.preventDefault();e.stopPropagation();close()};$('accToReg').onclick=()=>auth(1);$('accToLogin').onclick=()=>auth(0);$('accProfile').onclick=profile;$('accLogout').onclick=logout;$('accLoginDo').onclick=login;$('accRegDo').onclick=register;$('accSave').onclick=save;m.onclick=e=>{if(e.target===m)close()};avatars();restoreLogin()}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{css();build()});else{css();build()}
+})();
+
+/* Stabilne kliknięcie Utwórz/Dołącz: przechwytujemy klik przed starym handlerem i zawsze używamy aktywnego Socket.IO. */
+(function(){
+  function showError(text){const e=document.getElementById('homeError');if(e){e.textContent=text;e.className='status error'}}
+  function room(code){const home=document.getElementById('home'),lobby=document.getElementById('lobby'),rc=document.getElementById('roomCode'),ls=document.getElementById('lobbyStatus');localStorage.setItem('planowanieRoom',code);if(rc)rc.textContent=code;if(home)home.classList.add('hidden');if(lobby)lobby.classList.remove('hidden');if(ls){ls.className='status';ls.textContent='Pokój utworzony. Czekam na połączenie z serwerem…'}}
+  function waitAndEmit(event,data){const s=window.planowanieSocket;if(!s)return showError('Nie załadował się klient gry. Odśwież stronę.');const send=()=>{try{s.emit(event,data)}catch(e){showError('Nie udało się połączyć z serwerem: '+(e.message||e))}};if(s.connected)send();else{showError('Łączenie z serwerem…');s.connect();let done=false;const on=()=>{if(done)return;done=true;s.off('connect',on);send()};s.on('connect',on);setTimeout(()=>{if(!done){done=true;s.off('connect',on);showError('Serwer gry nie odpowiada. Spróbuj ponownie za chwilę.')}},15000)}}
+  document.addEventListener('click',function(e){
+    const create=e.target.closest&&e.target.closest('#create'),join=e.target.closest&&e.target.closest('#join');
+    if(!create&&!join)return;
+    e.preventDefault();e.stopImmediatePropagation();
+    const name=(document.getElementById('name')?.value||'').trim()||'Gracz',token=localStorage.getItem('planowaniePlayerToken')||'';
+    if(create){showError('Łączenie z serwerem…');waitAndEmit('createRoom',{name,token});return}
+    const code=(document.getElementById('code')?.value||'').trim().toUpperCase();if(!code){showError('Wpisz kod pokoju.');return}showError('Łączenie z serwerem…');waitAndEmit('joinRoom',{code,name,token});
+  },true);
+  window.addEventListener('error',e=>{if(e&&e.message)showError('Błąd aplikacji: '+e.message)});
+  window.addEventListener('unhandledrejection',e=>{const r=e&&e.reason;if(r)showError('Błąd aplikacji: '+(r.message||String(r))) });
 })();
