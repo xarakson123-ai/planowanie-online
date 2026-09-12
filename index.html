@@ -45,10 +45,10 @@
 <h1>♠ Planowanie</h1>
 <p class="muted">Oh Hell / Windykacja — pełna talia, pokoje online i kartka do zapisywania lew.</p>
 <div class="grid">
-<div class="field"><label>Twoje imię</label><input id="name" maxlength="18" placeholder="np. Kuba"></div>
-<div class="field"><label>Kod pokoju (przy dołączaniu)</label><input id="code" maxlength="6" placeholder="np. A1B2C3"></div>
+<div class="field"><label>Twoje imię</label><input id="name" maxlength="18" autocomplete="username" placeholder="np. Kuba"></div>
+<div class="field"><label>Kod pokoju (przy dołączaniu)</label><input id="code" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="np. A1B2C3"></div>
 </div>
-<div class="row" style="margin-top:15px"><button class="btn" id="create">Utwórz pokój</button><button class="btn dark" id="join">Dołącz do pokoju</button></div>
+<div class="row" style="margin-top:15px"><button class="btn" id="create" type="button">Utwórz pokój</button><button class="btn dark" id="join" type="button">Dołącz do pokoju</button></div>
 <p id="homeError"></p>
 </section>
 <section id="lobby" class="hidden"><div class="panel"><div class="top"><div><h2 style="margin:0">Pokój <span id="roomCode"></span></h2><p class="muted">Podaj kod znajomym.</p></div><span class="badge">2–4 graczy</span></div><div class="lobbyPlayers" id="lobbyPlayers"></div><div class="status" id="lobbyStatus"></div><div class="row"><button class="btn" id="start">Rozpocznij grę</button><button class="btn dark" id="copy">Kopiuj kod</button></div></div></section>
@@ -59,7 +59,7 @@
 <aside><div class="paper"><h3>📄 Kartka wyników</h3><table><thead><tr><th>Gracz</th><th>Licz.</th><th>Lewy</th><th>Pkt</th></tr></thead><tbody id="sheet"></tbody></table></div><div class="panel" style="margin-top:15px"><h3 style="margin-top:0">Stół</h3><div id="trick" class="table"></div><div class="log" id="log"></div></div></aside></div>
 </section></div>
 <div id="dealAnim" class="deal-overlay"><div class="deal-stack"></div><span class="deal-card c1"></span><span class="deal-card c2"></span><span class="deal-card c3"></span><span class="deal-card c4"></span><div class="deal-txt">Tasowanie i rozdawanie…</div></div>
-<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script><script src="config.js"></script><script>
+<script src="https://planowanie-server.onrender.com/socket.io/socket.io.js"></script><script src="config.js"></script><script>
 const SERVER=window.PLANOWANIE_SERVER||location.origin;const socket=io(SERVER,{transports:['websocket','polling'],reconnection:true});let myId=null,last=null,lastRound=0,dealLock=false,dealTimer=null,sortMode='rank';const $=id=>document.getElementById(id);
 function makeToken(){try{return crypto.randomUUID()}catch(e){return Date.now().toString(36)+Math.random().toString(36).slice(2)}}let playerToken=localStorage.getItem('planowaniePlayerToken');if(!playerToken){playerToken=makeToken();localStorage.setItem('planowaniePlayerToken',playerToken)}function savedRoom(){return localStorage.getItem('planowanieRoom')||''}function saveRoom(code){if(code)localStorage.setItem('planowanieRoom',code)}function show(id){['home','lobby','game'].forEach(x=>$(x).classList.toggle('hidden',x!==id))}function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 socket.on('connect',()=>{const code=savedRoom();if(code)socket.emit('resume',{code,token:playerToken})});socket.on('roomCreated',code=>{saveRoom(code);$('roomCode').textContent=code;show('lobby');$('homeError').textContent=''});socket.on('roomJoined',code=>{saveRoom(code);$('roomCode').textContent=code;show('lobby');$('homeError').textContent=''});socket.on('resumed',code=>{saveRoom(code)});socket.on('errorMsg',m=>{for(const id of ['homeError','lobbyStatus','handMsg'])if($(id)){$(id).textContent=m;if(id!=='handMsg')$(id).className='status error'}});
