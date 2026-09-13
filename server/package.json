@@ -4,7 +4,7 @@
   "description": "Planowanie online server",
   "main": "server.js",
   "scripts": {
-    "start": "node -r ./runtime_features.js server.js"
+    "start": "node -r ./runtime_v8.js server.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
