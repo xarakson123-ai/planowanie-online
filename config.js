@@ -2,5 +2,9 @@ document.write('<script src="config-base.js"><\/script>');
 document.write('<script src="social-sync.js"><\/script>');
 document.write('<script src="social.js"><\/script>');
 document.write('<script src="enhancements.js"><\/script>');
-document.write('<script src="ui-v8.js"><\/script>');
-(function(){var x=document.createElement('script');x.src='social-fix.js';document.head.appendChild(x)})();
+(function(){
+  window.addEventListener('load',function(){
+    document.body.style.pointerEvents='auto';
+    document.querySelectorAll('.uiModal,.v8Overlay').forEach(function(e){e.remove();});
+  });
+})();
