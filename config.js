@@ -40,19 +40,88 @@ $('accLogin').onclick=()=>auth(0);$('accRegister').onclick=()=>auth(1);$('accClo
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{css();build()});else{css();build()}
 })();
 
-/* Stabilne kliknięcie Utwórz/Dołącz: przechwytujemy klik przed starym handlerem i zawsze używamy aktywnego Socket.IO. */
+/* Stabilne kliknięcie Utwórz/Dołącz. */
 (function(){
   function showError(text){const e=document.getElementById('homeError');if(e){e.textContent=text;e.className='status error'}}
-  function room(code){const home=document.getElementById('home'),lobby=document.getElementById('lobby'),rc=document.getElementById('roomCode'),ls=document.getElementById('lobbyStatus');localStorage.setItem('planowanieRoom',code);if(rc)rc.textContent=code;if(home)home.classList.add('hidden');if(lobby)lobby.classList.remove('hidden');if(ls){ls.className='status';ls.textContent='Pokój utworzony. Czekam na połączenie z serwerem…'}}
   function waitAndEmit(event,data){const s=window.planowanieSocket;if(!s)return showError('Nie załadował się klient gry. Odśwież stronę.');const send=()=>{try{s.emit(event,data)}catch(e){showError('Nie udało się połączyć z serwerem: '+(e.message||e))}};if(s.connected)send();else{showError('Łączenie z serwerem…');s.connect();let done=false;const on=()=>{if(done)return;done=true;s.off('connect',on);send()};s.on('connect',on);setTimeout(()=>{if(!done){done=true;s.off('connect',on);showError('Serwer gry nie odpowiada. Spróbuj ponownie za chwilę.')}},15000)}}
-  document.addEventListener('click',function(e){
-    const create=e.target.closest&&e.target.closest('#create'),join=e.target.closest&&e.target.closest('#join');
-    if(!create&&!join)return;
-    e.preventDefault();e.stopImmediatePropagation();
-    const name=(document.getElementById('name')?.value||'').trim()||'Gracz',token=localStorage.getItem('planowaniePlayerToken')||'';
-    if(create){showError('Łączenie z serwerem…');waitAndEmit('createRoom',{name,token});return}
-    const code=(document.getElementById('code')?.value||'').trim().toUpperCase();if(!code){showError('Wpisz kod pokoju.');return}showError('Łączenie z serwerem…');waitAndEmit('joinRoom',{code,name,token});
-  },true);
+  document.addEventListener('click',function(e){const create=e.target.closest&&e.target.closest('#create'),join=e.target.closest&&e.target.closest('#join');if(!create&&!join)return;e.preventDefault();e.stopImmediatePropagation();const name=(document.getElementById('name')?.value||'').trim()||'Gracz',token=localStorage.getItem('planowaniePlayerToken')||'';if(create){showError('Łączenie z serwerem…');waitAndEmit('createRoom',{name,token});return}const code=(document.getElementById('code')?.value||'').trim().toUpperCase();if(!code){showError('Wpisz kod pokoju.');return}showError('Łączenie z serwerem…');waitAndEmit('joinRoom',{code,name,token});},true);
   window.addEventListener('error',e=>{if(e&&e.message)showError('Błąd aplikacji: '+e.message)});
   window.addEventListener('unhandledrejection',e=>{const r=e&&e.reason;if(r)showError('Błąd aplikacji: '+(r.message||String(r))) });
+})();
+
+/* Funkcjonalne menu w stylu Durak Online. Wszystkie przyciski z górnego paska i prawej strony otwierają prawdziwe panele. */
+(function(){
+  function addCss(){
+    const s=document.createElement('style');
+    s.textContent=`
+      .uiModal{position:fixed;inset:0;z-index:5000;display:flex;align-items:center;justify-content:center;padding:20px;background:#020711cc;backdrop-filter:blur(7px)}
+      .uiModal.hidden{display:none!important}.uiCard{width:min(620px,94vw);max-height:86vh;overflow:auto;background:linear-gradient(145deg,#102333,#06111c);border:1px solid #4c687a;border-radius:16px;box-shadow:0 25px 80px #000d;padding:24px;color:#eef3f5;font-family:Arial,sans-serif}
+      .uiCard h2{margin:0 0 6px;color:#f1d994;font-family:Georgia,serif;font-size:29px}.uiSub{color:#9fb1bf;margin-bottom:18px}.uiRow{display:flex;gap:10px;flex-wrap:wrap;margin-top:15px}.uiTile{background:#091925;border:1px solid #304a5b;border-radius:12px;padding:14px;margin:9px 0}.uiTile strong{color:#f4d98b}.uiClose{float:right}.uiList{margin:8px 0;padding-left:20px;color:#c9d5dc;line-height:1.7}.uiToggle{display:flex;align-items:center;justify-content:space-between;padding:13px;background:#091925;border:1px solid #304a5b;border-radius:10px;margin:8px 0}.uiToggle input{width:20px;height:20px;accent-color:#0b82b8}.compact-mode .gamearea{transform:scale(.93);transform-origin:top center}.compact-mode .handPanel{width:min(980px,84vw)}
+    `;
+    document.head.appendChild(s);
+  }
+  let modal;
+  function ensure(){
+    if(modal)return modal;
+    modal=document.createElement('div');modal.id='uiActionModal';modal.className='uiModal hidden';
+    modal.innerHTML='<div class="uiCard"><button id="uiClose" class="btn dark uiClose" type="button">Wróć</button><h2 id="uiTitle"></h2><div id="uiBody"></div></div>';
+    document.body.appendChild(modal);
+    document.getElementById('uiClose').onclick=()=>close();
+    modal.addEventListener('click',e=>{if(e.target===modal)close()});
+    return modal;
+  }
+  function open(title,html,after){ensure();document.getElementById('uiTitle').textContent=title;document.getElementById('uiBody').innerHTML=html;modal.classList.remove('hidden');if(after)after(document.getElementById('uiBody'));}
+  function close(){if(modal)modal.classList.add('hidden')}
+  function playerNames(){
+    const ids=['seat1','seat2','seat3','seat4'];const names=[];
+    ids.forEach(id=>{const e=document.getElementById(id);if(!e)return;const n=e.querySelector('.seatName');if(n&&n.textContent)names.push(n.textContent)});
+    return names;
+  }
+  function news(){open('News','<div class="uiTile"><strong>🎴 Planowanie Online</strong><p>Nowy wygląd stołu, kart i interfejsu jest już aktywny.</p></div><div class="uiTile"><strong>🃏 Karty</strong><p>Ręka jest prezentowana jako wachlarz, a zagrywana karta unosi się nad pozostałymi.</p></div><div class="uiTile"><strong>🌐 Gra online</strong><p>Pokoje działają przez serwer Render, więc możesz grać ze znajomymi.</p></div>');}
+  function shop(){open('Sklep','<div class="uiTile"><strong>🎁 Pakiet kart</strong><p>Nowe rewersy i dodatki kosmetyczne będą dostępne tutaj.</p><button class="btn" type="button" id="shopSoon">Sprawdź ofertę</button></div><div class="uiTile"><strong>💎 Bonusy</strong><p>Sklep jest przygotowany pod przyszłe przedmioty i bonusy.</p></div>',body=>{body.querySelector('#shopSoon').onclick=()=>{body.querySelector('#shopSoon').textContent='Oferta w przygotowaniu';}});}
+  function messages(){open('Wiadomości','<div class="uiTile"><strong>✉ Skrzynka</strong><p>Brak nowych wiadomości.</p></div><div class="uiTile"><strong>📢 System</strong><p>Wiadomości systemowe będą pojawiały się tutaj.</p></div>');}
+  function friends(){const names=playerNames();open('Znajomi',(names.length?'<div class="uiTile"><strong>Gracze przy stole</strong><ul class="uiList">'+names.map(n=>'<li>'+n+'</li>').join('')+'</ul></div>':'<div class="uiTile"><strong>Lista znajomych</strong><p>Nie jesteś jeszcze przy stole. Dodaj znajomych, gdy zaczniesz wspólną grę.</p></div>')+'<div class="uiTile"><strong>👥 Pokoje</strong><p>Możesz wysłać znajomym kod pokoju z lobby.</p></div>');}
+  function support(){open('Wsparcie','<div class="uiTile"><strong>❓ Jak zagrać?</strong><p>Utwórz pokój, podaj kod znajomym, rozpocznij grę i deklaruj liczbę lew. Następnie zagrywaj karty zgodnie z kolorem wyjścia.</p></div><div class="uiTile"><strong>🐞 Problem z kartą?</strong><p>Odśwież stronę i spróbuj ponownie. Połączenie z serwerem jest automatycznie ponawiane.</p></div><div class="uiTile"><strong>🌐 Problem z połączeniem?</strong><p>Sprawdź, czy serwer gry jest dostępny i wykonaj Ctrl + F5.</p></div>');}
+  function rules(){open('Zasady','<div class="uiTile"><strong>🎴 Cel gry</strong><p>Przed rozpoczęciem rozdania deklarujesz, ile lew zdobędziesz. Potem próbujesz dokładnie tyle wygrać.</p></div><div class="uiTile"><strong>🃏 Zagrywanie</strong><p>Jeżeli masz kartę w kolorze wyjścia, musisz dołożyć do tego koloru. Jeśli nie masz, możesz zagrać inną kartę.</p></div><div class="uiTile"><strong>🏆 Punkty</strong><p>Dokładna liczba deklarowanych i wygranych lew daje premię, a pomyłka daje karę.</p></div>');}
+  function settings(){
+    const compact=localStorage.getItem('planowanieCompact')==='1', anim=localStorage.getItem('planowanieAnimations')!=='0';
+    open('Ustawienia','<div class="uiToggle"><span>✨ Animacje interfejsu</span><input id="setAnim" type="checkbox" '+(anim?'checked':'')+'></div><div class="uiToggle"><span>📐 Tryb kompaktowy stołu</span><input id="setCompact" type="checkbox" '+(compact?'checked':'')+'></div><div class="uiTile"><strong>ℹ Ustawienia zapisują się automatycznie</strong><p>Zmiany zostaną zachowane w tej przeglądarce.</p></div>',body=>{
+      const a=body.querySelector('#setAnim'),c=body.querySelector('#setCompact');
+      a.onchange=()=>{localStorage.setItem('planowanieAnimations',a.checked?'1':'0');document.body.classList.toggle('no-animations',!a.checked)};
+      c.onchange=()=>{localStorage.setItem('planowanieCompact',c.checked?'1':'0');document.body.classList.toggle('compact-mode',c.checked)};
+    });
+  }
+  function leaveTable(){
+    if(!confirm('Czy na pewno chcesz opuścić stół?'))return;
+    try{if(window.planowanieSocket)window.planowanieSocket.disconnect()}catch{}
+    localStorage.removeItem('planowanieRoom');
+    ['game','lobby'].forEach(id=>{const e=document.getElementById(id);if(e)e.classList.add('hidden')});
+    const h=document.getElementById('home');if(h)h.classList.remove('hidden');
+    close();
+  }
+  function stand(){
+    const game=document.getElementById('game');
+    if(game){game.classList.add('standing');game.dataset.standing='1'}
+    open('Stoisz od stołu','<div class="uiTile"><strong>🚶 Tryb obserwatora</strong><p>Wstałeś od stołu. Twoja ręka jest tymczasowo ukryta. Kliknij „Usiądź ponownie”, aby wrócić do widoku gry.</p><button class="btn" type="button" id="sitAgain">Usiądź ponownie</button></div>',body=>{body.querySelector('#sitAgain').onclick=()=>{if(game)game.classList.remove('standing');close()}});
+  }
+  function exit(){
+    if(!confirm('Czy na pewno chcesz wyjść z Planowania Online?'))return;
+    try{if(window.planowanieSocket)window.planowanieSocket.disconnect()}catch{}
+    localStorage.removeItem('planowanieRoom');
+    document.body.innerHTML='<main style="min-height:100vh;display:grid;place-items:center;background:#06111c;color:#f1d994;font:700 28px Georgia;text-align:center"><div>Do zobaczenia!<br><button id="returnGame" class="btn" style="margin-top:20px">Wróć do gry</button></div></main>';
+    document.getElementById('returnGame').onclick=()=>location.reload();
+  }
+  function wire(){
+    addCss();
+    const top=document.querySelectorAll('.topbar .navitem');
+    const actions=[news,shop,messages,friends,support,settings,exit];
+    top.forEach((el,i)=>{if(actions[i]){el.style.cursor='pointer';el.setAttribute('role','button');el.onclick=e=>{e.preventDefault();actions[i]()}}});
+    const side=document.querySelectorAll('.sideButtons .btn');
+    if(side[0])side[0].onclick=leaveTable;
+    if(side[1])side[1].onclick=stand;
+    if(side[2])side[2].onclick=rules;
+    document.body.classList.toggle('compact-mode',localStorage.getItem('planowanieCompact')==='1');
+    document.body.classList.toggle('no-animations',localStorage.getItem('planowanieAnimations')==='0');
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',wire);else wire();
 })();
