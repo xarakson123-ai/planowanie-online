@@ -7,200 +7,72 @@ const { Pool } = require('pg');
 
 const app = express();
 const server = http.createServer(app);
+app.use(express.json({limit:'30kb'}));
+app.use((req,res,next)=>{res.setHeader('Access-Control-Allow-Origin','*');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');if(req.method==='OPTIONS')return res.sendStatus(204);next();});
+const io = new Server(server,{cors:{origin:'*',methods:['GET','POST']}});
+const pool = new Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.DATABASE_URL?{rejectUnauthorized:false}:false});
 
-app.use(express.json({ limit: '20kb' }));
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
-});
+const AVATARS=['😀','😎','🤠','🥶','😈','👑','🦊','🐺','🐼','🐸','🤖','👽','🎩','🃏','♠️','🔥'];
+const DECKS={classic:{name:'Klasyczna',price:0,emoji:'🂠'},red:{name:'Czerwony ogień',price:250,emoji:'🔥'},blue:{name:'Nocny błękit',price:500,emoji:'🌌'},gold:{name:'Królewska złota',price:900,emoji:'👑'},neon:{name:'Neon',price:1400,emoji:'💠'},royal:{name:'Royal Black',price:2200,emoji:'♛'}};
+const PUBLIC_DECKS=Object.entries(DECKS).map(([id,x])=>({id,...x}));
+function cleanUsername(v){return String(v||'').trim().replace(/\s+/g,'').slice(0,18)}
+function validUsername(v){return /^[a-zA-Z0-9_ąćęłńóśźżĄĆĘŁŃÓŚŹŻ-]{3,18}$/.test(v)}
+function cleanPassword(v){return String(v||'')}
+function cleanAvatar(v){return AVATARS.includes(String(v))?String(v):'😀'}
+function tokenFromReq(req){const a=req.headers.authorization||'';return a.startsWith('Bearer ')?a.slice(7).trim():''}
+function makeToken(){return crypto.randomBytes(48).toString('hex')}
+async function getUserFromToken(token){if(!process.env.DATABASE_URL)return null;const t=String(token||'').trim();if(!t)return null;const r=await pool.query(`SELECT u.id,u.username,u.avatar,u.coins,u.owned_decks,u.equipped_deck FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>NOW()`,[t]);return r.rows[0]||null}
+function publicUser(u){return u?{id:u.id,username:u.username,avatar:u.avatar||'😀',coins:Number(u.coins||0),ownedDecks:Array.isArray(u.owned_decks)?u.owned_decks:['classic'],equippedDeck:u.equipped_deck||'classic'}:null}
+async function createSession(userId){const t=makeToken();await pool.query(`INSERT INTO sessions(token,user_id,expires_at) VALUES($1,$2,NOW()+INTERVAL '30 days')`,[t,userId]);return t}
+async function initDatabase(){if(!process.env.DATABASE_URL){console.log('WARNING: DATABASE_URL nie jest ustawione.');return}await pool.query(`
+CREATE TABLE IF NOT EXISTS users(id SERIAL PRIMARY KEY,username VARCHAR(18) UNIQUE NOT NULL,password_hash TEXT NOT NULL,avatar VARCHAR(20) NOT NULL DEFAULT '😀',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS sessions(id SERIAL PRIMARY KEY,token TEXT UNIQUE NOT NULL,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,expires_at TIMESTAMP NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS coins INTEGER NOT NULL DEFAULT 1000;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS owned_decks JSONB NOT NULL DEFAULT '["classic"]'::jsonb;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS equipped_deck VARCHAR(32) NOT NULL DEFAULT 'classic';
+CREATE TABLE IF NOT EXISTS friends(user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,friend_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(user_id,friend_id));
+CREATE INDEX IF NOT EXISTS sessions_token_idx ON sessions(token);CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);CREATE INDEX IF NOT EXISTS users_username_idx ON users(LOWER(username));
+`);console.log('Database ready.')}
+async function authUser(req){return getUserFromToken(tokenFromReq(req))}
 
-const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
+app.post('/api/register',async(req,res)=>{try{if(!process.env.DATABASE_URL)return res.status(500).json({error:'Baza danych nie jest skonfigurowana.'});const username=cleanUsername(req.body?.username),password=cleanPassword(req.body?.password),avatar=cleanAvatar(req.body?.avatar);if(!validUsername(username))return res.status(400).json({error:'Login musi mieć 3–18 znaków i może zawierać litery, cyfry, _ lub -.'});if(password.length<6||password.length>100)return res.status(400).json({error:'Hasło musi mieć od 6 do 100 znaków.'});const ex=await pool.query('SELECT id FROM users WHERE LOWER(username)=LOWER($1)',[username]);if(ex.rows.length)return res.status(409).json({error:'Taki login jest już zajęty.'});const hash=await bcrypt.hash(password,12);const r=await pool.query(`INSERT INTO users(username,password_hash,avatar) VALUES($1,$2,$3) RETURNING id,username,avatar,coins,owned_decks,equipped_deck`,[username,hash,avatar]);const user=r.rows[0],token=await createSession(user.id);res.json({ok:true,user:publicUser(user),token})}catch(e){console.error('REGISTER ERROR:',e);res.status(500).json({error:'Nie udało się utworzyć konta.'})}});
+app.post('/api/login',async(req,res)=>{try{if(!process.env.DATABASE_URL)return res.status(500).json({error:'Baza danych nie jest skonfigurowana.'});const username=cleanUsername(req.body?.username),password=cleanPassword(req.body?.password);const r=await pool.query(`SELECT id,username,password_hash,avatar,coins,owned_decks,equipped_deck FROM users WHERE LOWER(username)=LOWER($1)`,[username]);const u=r.rows[0];if(!u||!(await bcrypt.compare(password,u.password_hash)))return res.status(401).json({error:'Nieprawidłowy login lub hasło.'});const token=await createSession(u.id);res.json({ok:true,user:publicUser(u),token})}catch(e){console.error('LOGIN ERROR:',e);res.status(500).json({error:'Nie udało się zalogować.'})}});
+app.get('/api/me',async(req,res)=>{try{const u=await authUser(req);if(!u)return res.status(401).json({error:'Sesja wygasła.'});res.json({ok:true,user:publicUser(u)})}catch(e){res.status(500).json({error:'Błąd serwera.'})}});
+app.post('/api/profile',async(req,res)=>{try{const u=await authUser(req);if(!u)return res.status(401).json({error:'Sesja wygasła.'});const a=cleanAvatar(req.body?.avatar);const r=await pool.query(`UPDATE users SET avatar=$1 WHERE id=$2 RETURNING id,username,avatar,coins,owned_decks,equipped_deck`,[a,u.id]);res.json({ok:true,user:publicUser(r.rows[0])})}catch(e){res.status(500).json({error:'Nie udało się zapisać profilu.'})}});
+app.post('/api/logout',async(req,res)=>{try{const t=tokenFromReq(req);if(t)await pool.query('DELETE FROM sessions WHERE token=$1',[t]);res.json({ok:true})}catch(e){res.json({ok:true})}});
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
-});
+app.get('/api/friends',async(req,res)=>{try{const u=await authUser(req);if(!u)return res.status(401).json({error:'Zaloguj się, aby używać znajomych.'});const r=await pool.query(`SELECT u.id,u.username,u.avatar FROM friends f JOIN users u ON u.id=f.friend_id WHERE f.user_id=$1 ORDER BY LOWER(u.username)`,[u.id]);res.json({ok:true,friends:r.rows})}catch(e){res.status(500).json({error:'Nie udało się pobrać znajomych.'})}});
+app.get('/api/friends/search',async(req,res)=>{try{const u=await authUser(req);if(!u)return res.status(401).json({error:'Zaloguj się, aby wyszukiwać graczy.'});const q=cleanUsername(req.query?.q||'');if(q.length<2)return res.json({ok:true,players:[]});const r=await pool.query(`SELECT id,username,avatar FROM users WHERE id<>$1 AND LOWER(username) LIKE LOWER($2) ORDER BY LOWER(username) LIMIT 20`,[u.id,`%${q}%`]);const f=await pool.query('SELECT friend_id FROM friends WHERE user_id=$1',[u.id]);const set=new Set(f.rows.map(x=>Number(x.friend_id)));res.json({ok:true,players:r.rows.map(x=>({...x,isFriend:set.has(Number(x.id))}))})}catch(e){res.status(500).json({error:'Nie udało się wyszukać graczy.'})}});
+app.post('/api/friends/add',async(req,res)=>{try{const u=await authUser(req);if(!u)return res.status(401).json({error:'Zaloguj się, aby dodawać znajomych.'});const targetId=Number(req.body?.userId);if(!Number.isInteger(targetId)||targetId===Number(u.id))return res.status(400).json({error:'Nieprawidłowy gracz.'});const target=await pool.query('SELECT id,username,avatar FROM users WHERE id=$1',[targetId]);if(!target.rows[0])return res.status(404).json({error:'Nie znaleziono gracza.'});await pool.query(`INSERT INTO friends(user_id,friend_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[u.id,targetId]);await pool.query(`INSERT INTO friends(user_id,friend_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[targetId,u.id]);res.json({ok:true,friend:target.rows[0]})}catch(e){console.error('FRIEND ADD ERROR:',e);res.status(500).json({error:'Nie udało się dodać znajomego.'})}});
 
-async function initDatabase() {
-  if (!process.env.DATABASE_URL) {
-    console.log('WARNING: DATABASE_URL nie jest ustawione.');
-    return;
-  }
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      username VARCHAR(18) UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      avatar VARCHAR(20) NOT NULL DEFAULT '😀',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-      id SERIAL PRIMARY KEY,
-      token TEXT UNIQUE NOT NULL,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      expires_at TIMESTAMP NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE INDEX IF NOT EXISTS sessions_token_idx ON sessions(token);
-    CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
-  `);
-  console.log('Database ready.');
-}
+app.get('/api/shop',async(req,res)=>{try{const u=await authUser(req);if(!u)return res.status(401).json({error:'Zaloguj się, aby wejść do sklepu.'});res.json({ok:true,coins:Number(u.coins||0),ownedDecks:Array.isArray(u.owned_decks)?u.owned_decks:['classic'],equippedDeck:u.equipped_deck||'classic',decks:PUBLIC_DECKS})}catch(e){res.status(500).json({error:'Nie udało się pobrać sklepu.'})}});
+app.post('/api/shop/buy',async(req,res)=>{try{const u=await authUser(req);if(!u)return res.status(401).json({error:'Zaloguj się, aby kupować talie.'});const id=String(req.body?.deckId||'');const deck=DECKS[id];if(!deck)return res.status(404).json({error:'Nie znaleziono talii.'});let owned=Array.isArray(u.owned_decks)?u.owned_decks:['classic'];if(owned.includes(id))return res.json({ok:true,message:'Masz już tę talię.',user:publicUser(u)});if(Number(u.coins||0)<deck.price)return res.status(400).json({error:`Potrzebujesz ${deck.price} coins.`});owned=[...owned,id];const r=await pool.query(`UPDATE users SET coins=coins-$1,owned_decks=$2::jsonb WHERE id=$3 RETURNING id,username,avatar,coins,owned_decks,equipped_deck`,[deck.price,JSON.stringify(owned),u.id]);res.json({ok:true,user:publicUser(r.rows[0]),deck})}catch(e){console.error('SHOP BUY ERROR:',e);res.status(500).json({error:'Nie udało się kupić talii.'})}});
+app.post('/api/shop/equip',async(req,res)=>{try{const u=await authUser(req);if(!u)return res.status(401).json({error:'Zaloguj się, aby zmieniać talię.'});const id=String(req.body?.deckId||'');const owned=Array.isArray(u.owned_decks)?u.owned_decks:['classic'];if(!owned.includes(id))return res.status(400).json({error:'Najpierw kup tę talię.'});const r=await pool.query(`UPDATE users SET equipped_deck=$1 WHERE id=$2 RETURNING id,username,avatar,coins,owned_decks,equipped_deck`,[id,u.id]);res.json({ok:true,user:publicUser(r.rows[0])})}catch(e){res.status(500).json({error:'Nie udało się wybrać talii.'})}});
 
-function cleanUsername(username) { return String(username || '').trim().replace(/\s+/g, '').slice(0, 18); }
-function validUsername(username) { return /^[a-zA-Z0-9_ąćęłńóśźżĄĆĘŁŃÓŚŹŻ-]{3,18}$/.test(username); }
-function cleanPassword(password) { return String(password || ''); }
-const AVATARS = ['😀','😎','🤠','🥶','😈','👑','🦊','🐺','🐼','🐸','🤖','👽','🎩','🃏','♠️','🔥'];
-function cleanAvatar(avatar) { return AVATARS.includes(String(avatar)) ? String(avatar) : '😀'; }
-function makeSessionToken() { return crypto.randomBytes(48).toString('hex'); }
+app.get('/health',(_req,res)=>res.json({ok:true,database:!!process.env.DATABASE_URL}));
 
-async function createSession(userId) {
-  const token = makeSessionToken();
-  await pool.query(`INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '30 days')`, [token, userId]);
-  return token;
-}
-async function getUserFromToken(token) {
-  if (!process.env.DATABASE_URL) return null;
-  const clean = String(token || '').trim();
-  if (!clean) return null;
-  const result = await pool.query(`SELECT u.id, u.username, u.avatar FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1 AND s.expires_at > NOW()`, [clean]);
-  return result.rows[0] || null;
-}
-async function deleteSession(token) { if (token) await pool.query(`DELETE FROM sessions WHERE token = $1`, [String(token).trim()]); }
-function publicUser(user) { return user ? { id: user.id, username: user.username, avatar: user.avatar } : null; }
-
-app.post('/api/register', async (req, res) => {
-  try {
-    if (!process.env.DATABASE_URL) return res.status(500).json({ error: 'Baza danych nie jest skonfigurowana.' });
-    const username = cleanUsername(req.body?.username), password = cleanPassword(req.body?.password), avatar = cleanAvatar(req.body?.avatar);
-    if (!validUsername(username)) return res.status(400).json({ error: 'Login musi mieć 3–18 znaków i może zawierać litery, cyfry, _ lub -.' });
-    if (password.length < 6 || password.length > 100) return res.status(400).json({ error: 'Hasło musi mieć od 6 do 100 znaków.' });
-    const existing = await pool.query(`SELECT id FROM users WHERE LOWER(username) = LOWER($1)`, [username]);
-    if (existing.rows.length) return res.status(409).json({ error: 'Taki login jest już zajęty.' });
-    const passwordHash = await bcrypt.hash(password, 12);
-    const result = await pool.query(`INSERT INTO users (username, password_hash, avatar) VALUES ($1, $2, $3) RETURNING id, username, avatar`, [username, passwordHash, avatar]);
-    const user = result.rows[0], token = await createSession(user.id);
-    res.json({ ok: true, user: publicUser(user), token });
-  } catch (err) { console.error('REGISTER ERROR:', err); res.status(500).json({ error: 'Nie udało się utworzyć konta.' }); }
-});
-
-app.post('/api/login', async (req, res) => {
-  try {
-    if (!process.env.DATABASE_URL) return res.status(500).json({ error: 'Baza danych nie jest skonfigurowana.' });
-    const username = cleanUsername(req.body?.username), password = cleanPassword(req.body?.password);
-    const result = await pool.query(`SELECT id, username, password_hash, avatar FROM users WHERE LOWER(username) = LOWER($1)`, [username]);
-    const user = result.rows[0];
-    if (!user) return res.status(401).json({ error: 'Nieprawidłowy login lub hasło.' });
-    const correct = await bcrypt.compare(password, user.password_hash);
-    if (!correct) return res.status(401).json({ error: 'Nieprawidłowy login lub hasło.' });
-    const token = await createSession(user.id);
-    res.json({ ok: true, user: publicUser(user), token });
-  } catch (err) { console.error('LOGIN ERROR:', err); res.status(500).json({ error: 'Nie udało się zalogować.' }); }
-});
-
-app.get('/api/me', async (req, res) => {
-  try {
-    const auth = req.headers.authorization || '', token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-    const user = await getUserFromToken(token);
-    if (!user) return res.status(401).json({ error: 'Sesja wygasła.' });
-    res.json({ ok: true, user: publicUser(user) });
-  } catch (err) { console.error('ME ERROR:', err); res.status(500).json({ error: 'Błąd serwera.' }); }
-});
-
-app.post('/api/profile', async (req, res) => {
-  try {
-    const auth = req.headers.authorization || '', token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-    const user = await getUserFromToken(token);
-    if (!user) return res.status(401).json({ error: 'Sesja wygasła.' });
-    const avatar = cleanAvatar(req.body?.avatar);
-    const result = await pool.query(`UPDATE users SET avatar = $1 WHERE id = $2 RETURNING id, username, avatar`, [avatar, user.id]);
-    res.json({ ok: true, user: publicUser(result.rows[0]) });
-  } catch (err) { console.error('PROFILE ERROR:', err); res.status(500).json({ error: 'Nie udało się zapisać profilu.' }); }
-});
-
-app.post('/api/logout', async (req, res) => {
-  try {
-    const auth = req.headers.authorization || '', token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-    await deleteSession(token); res.json({ ok: true });
-  } catch (err) { console.error('LOGOUT ERROR:', err); res.json({ ok: true }); }
-});
-
-app.get('/health', (_req, res) => res.json({ ok: true, database: !!process.env.DATABASE_URL }));
-
-const rooms = new Map();
-const SUITS = ['♣', '♦', '♥', '♠'];
-const RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
-const value = r => RANKS.indexOf(r);
-function cleanName(name) { return String(name || 'Gracz').trim().slice(0, 18) || 'Gracz'; }
-function cleanToken(token) { return String(token || '').trim().slice(0, 200); }
-function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
-function sortHand(hand) { const suitOrder = {'♣':0,'♦':1,'♥':2,'♠':3}; hand.sort((a,b) => value(a.r)-value(b.r) || suitOrder[a.s]-suitOrder[b.s]); }
-function makeDeck() { return SUITS.flatMap(s => RANKS.map(r => ({ id: crypto.randomUUID(), key: `${s}|${r}`, s, r }))); }
-function newCode() { let c; do { c = crypto.randomBytes(3).toString('hex').toUpperCase(); } while (rooms.has(c)); return c; }
-function maxHandSize(n) { return n === 2 ? 24 : n === 3 ? 16 : n === 4 ? 12 : 0; }
-function findPlayer(room,id) { return room.players.find(x => x.id === id); }
-function findPlayerByToken(room,token) { if (!token) return null; return room.players.find(x => x.token === token) || null; }
-function publicRoom(room) { return { code:room.code, phase:room.phase, round:room.round, maxRounds:room.maxRounds, handSize:room.handSize, trump:room.trump, currentPlayer:room.currentPlayer, currentDeclarer:room.currentDeclarer, trick:room.trick.map(t=>({player:t.player,card:t.card})), players:room.players.map(p=>({id:p.id,name:p.name,avatar:p.avatar||'😀',score:p.score,decl:p.decl,won:p.won,roundPoints:p.roundPoints,connected:p.connected})) }; }
-function stateFor(room,playerId) { const pl=findPlayer(room,playerId); return { room:publicRoom(room), myId:playerId, hand:pl?.hand||[] }; }
-function send(room) { for (const pl of room.players) if (pl.connected && pl.socketId) io.to(pl.socketId).emit('state',stateFor(room,pl.id)); }
-function attachSocket(socket,room,pl) { pl.socketId=socket.id; pl.connected=true; socket.data.room=room.code; socket.data.playerId=pl.id; socket.data.token=pl.token; socket.join(pl.socketRoom); }
-function orderNext(room,id) { const i=room.players.findIndex(x=>x.id===id); return room.players[(i+1)%room.players.length].id; }
-function trickWinner(room) { const lead=room.trick[0].card.s; let best=0; for(let i=1;i<room.trick.length;i++){const a=room.trick[i].card,b=room.trick[best].card,at=a.s===room.trump,bt=b.s===room.trump;if(at&&!bt)best=i;else if(at===bt){const al=a.s===lead,bl=b.s===lead;if(al&&!bl)best=i;else if(al===bl&&value(a.r)>value(b.r))best=i;}} return room.trick[best].player; }
-
-function startRound(room) {
-  if (room.round > room.maxRounds) { room.phase='finished'; send(room); return; }
-  room.phase='declaration'; room.handSize=room.maxRounds-room.round+1; room.trick=[]; room.currentPlayer=null;
-  room.currentDeclarer=room.players[(room.dealerIndex+1)%room.players.length].id; room.deck=shuffle(makeDeck());
-  const trumpCard=room.deck.pop(); room.trump=trumpCard.s;
-  room.players.forEach(pl=>{pl.hand=[];pl.decl=null;pl.won=0;pl.roundPoints=0;for(let i=0;i<room.handSize;i++)pl.hand.push(room.deck.pop());sortHand(pl.hand);}); send(room);
-}
-function declarationSum(room){return room.players.reduce((sum,p)=>sum+(p.decl??0),0);}
-function declarationDone(room){return room.players.every(p=>p.decl!==null);}
-function startPlay(room){room.phase='play';room.currentPlayer=room.players[(room.dealerIndex+1)%room.players.length].id;send(room);}
-function declare(room,playerId,amount){const pl=findPlayer(room,playerId);if(!pl)return'Gracz nie istnieje.';if(room.phase!=='declaration')return'Nie trwa deklarowanie.';if(room.currentDeclarer!==playerId)return'Teraz deklaruje inny gracz.';const n=Number(amount);if(!Number.isInteger(n)||n<0||n>room.handSize)return'Nieprawidłowa deklaracja.';if(room.players.length>1&&declarationSum(room)-(pl.decl??0)+n===room.handSize&&room.players.some(x=>x.id!==playerId&&x.decl===null))return'Nie można teraz domknąć sumy deklaracji.';pl.decl=n;const i=room.players.findIndex(x=>x.id===playerId);room.currentDeclarer=room.players[(i+1)%room.players.length].id;if(declarationDone(room))startPlay(room);else send(room);return null;}
-
-function play(room,playerId,card){
-  const pl=findPlayer(room,playerId);
-  if(!pl||room.phase!=='play'||room.currentPlayer!==playerId)return'Nie jest teraz Twoja kolej.';
-  const wantedId=String(card?.id||'').trim(),wantedKey=String(card?.key||'').trim(),wantedSuit=String(card?.s||'').trim(),wantedRank=String(card?.r||'').trim();
-  let idx=-1;
-  if(wantedId)idx=pl.hand.findIndex(c=>String(c.id)===wantedId);
-  if(idx<0&&wantedKey)idx=pl.hand.findIndex(c=>String(c.key)===wantedKey);
-  if(idx<0&&wantedSuit&&wantedRank)idx=pl.hand.findIndex(c=>c.s===wantedSuit&&c.r===wantedRank);
-  if(idx<0){console.log(`[PLAY] karta nie znaleziona: room=${room.code} player=${pl.name} id=${wantedId} key=${wantedKey}`);return'Nie mam takiej karty w tej ręce.';}
-  const playedCard=pl.hand[idx],lead=room.trick[0]?.card.s;
-  if(lead&&pl.hand.some(c=>c.s===lead)&&playedCard.s!==lead)return'Musisz dołożyć do koloru.';
-  pl.hand.splice(idx,1);room.trick.push({player:playerId,card:playedCard});
-  if(room.trick.length<room.players.length){room.currentPlayer=orderNext(room,playerId);send(room);return null;}
-  const winId=trickWinner(room),winner=findPlayer(room,winId);if(winner)winner.won++;
-  room.currentPlayer=winId;
-  const completedTrick=room.trick;
-  send(room);
-  setTimeout(()=>{
-    if(!rooms.has(room.code))return;
-    if(room.trick!==completedTrick)return;
-    room.trick=[];
-    if(room.players.every(x=>x.hand.length===0))finishRound(room);else send(room);
-  },1500);
-  return null;
-}
-
-function finishRound(room){for(const pl of room.players){pl.roundPoints=pl.won===pl.decl?10+pl.won:-Math.abs(pl.decl-pl.won)*10;pl.score+=pl.roundPoints;}room.phase='roundEnd';send(room);setTimeout(()=>{if(!rooms.has(room.code))return;room.round++;room.dealerIndex=(room.dealerIndex+1)%room.players.length;startRound(room);},1800);}
-function createPlayer(name,token,avatar){return{id:crypto.randomUUID(),token,name:cleanName(name),avatar:cleanAvatar(avatar),score:0,hand:[],decl:null,won:0,roundPoints:0,connected:false,socketId:null,socketRoom:null};}
+const rooms=new Map(),SUITS=['♣','♦','♥','♠'],RANKS=['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+const value=r=>RANKS.indexOf(r);function cleanName(v){return String(v||'Gracz').trim().slice(0,18)||'Gracz'}function cleanToken(v){return String(v||'').trim().slice(0,200)}function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}function sortHand(h){const o={'♣':0,'♦':1,'♥':2,'♠':3};h.sort((a,b)=>value(a.r)-value(b.r)||o[a.s]-o[b.s])}function makeDeck(){return SUITS.flatMap(s=>RANKS.map(r=>({id:crypto.randomUUID(),key:`${s}|${r}`,s,r})))}function newCode(){let c;do{c=crypto.randomBytes(3).toString('hex').toUpperCase()}while(rooms.has(c));return c}function maxHandSize(n){return n===2?24:n===3?16:n===4?12:0}function findPlayer(r,id){return r.players.find(x=>x.id===id)}function findPlayerByToken(r,t){return t?r.players.find(x=>x.token===t)||null:null}
+function publicRoom(r){return{code:r.code,phase:r.phase,round:r.round,maxRounds:r.maxRounds,handSize:r.handSize,trump:r.trump,currentPlayer:r.currentPlayer,currentDeclarer:r.currentDeclarer,trick:r.trick.map(t=>({player:t.player,card:t.card})),players:r.players.map(p=>({id:p.id,name:p.name,avatar:p.avatar||'😀',score:p.score,decl:p.decl,won:p.won,roundPoints:p.roundPoints,connected:p.connected,accountUsername:p.accountUsername||null,accountId:p.accountId||null,equippedDeck:p.equippedDeck||'classic'}))}}
+function stateFor(r,id){const p=findPlayer(r,id);return{room:publicRoom(r),myId:id,hand:p?.hand||[]}}function send(r){for(const p of r.players)if(p.connected&&p.socketId)io.to(p.socketId).emit('state',stateFor(r,p.id))}function attach(socket,r,p){p.socketId=socket.id;p.connected=true;socket.data.room=r.code;socket.data.playerId=p.id;socket.data.token=p.token;socket.join(p.socketRoom)}function next(r,id){const i=r.players.findIndex(x=>x.id===id);return r.players[(i+1)%r.players.length].id}
+function trickWinner(r){const lead=r.trick[0].card.s;let best=0;for(let i=1;i<r.trick.length;i++){const a=r.trick[i].card,b=r.trick[best].card,at=a.s===r.trump,bt=b.s===r.trump;if(at&&!bt)best=i;else if(at===bt){const al=a.s===lead,bl=b.s===lead;if(al&&!bl)best=i;else if(al===bl&&value(a.r)>value(b.r))best=i}}return r.trick[best].player}
+function startRound(r){if(r.round>r.maxRounds){r.phase='finished';send(r);return}r.phase='declaration';r.handSize=r.maxRounds-r.round+1;r.trick=[];r.currentPlayer=null;r.currentDeclarer=r.players[(r.dealerIndex+1)%r.players.length].id;r.deck=shuffle(makeDeck());r.trump=r.deck.pop().s;r.players.forEach(p=>{p.hand=[];p.decl=null;p.won=0;p.roundPoints=0;for(let i=0;i<r.handSize;i++)p.hand.push(r.deck.pop());sortHand(p.hand)});send(r)}
+function declarationSum(r){return r.players.reduce((s,p)=>s+(p.decl??0),0)}function declarationDone(r){return r.players.every(p=>p.decl!==null)}function startPlay(r){r.phase='play';r.currentPlayer=r.players[(r.dealerIndex+1)%r.players.length].id;send(r)}
+function declare(r,id,amount){const p=findPlayer(r,id);if(!p)return'Gracz nie istnieje.';if(r.phase!=='declaration')return'Nie trwa deklarowanie.';if(r.currentDeclarer!==id)return'Teraz deklaruje inny gracz.';const n=Number(amount);if(!Number.isInteger(n)||n<0||n>r.handSize)return'Nieprawidłowa deklaracja.';if(r.players.length>1&&declarationSum(r)-(p.decl??0)+n===r.handSize&&r.players.some(x=>x.id!==id&&x.decl===null))return'Nie można teraz domknąć sumy deklaracji.';p.decl=n;const i=r.players.findIndex(x=>x.id===id);r.currentDeclarer=r.players[(i+1)%r.players.length].id;if(declarationDone(r))startPlay(r);else send(r);return null}
+function play(r,id,card){const p=findPlayer(r,id);if(!p||r.phase!=='play'||r.currentPlayer!==id)return'Nie jest teraz Twoja kolej.';const wid=String(card?.id||'').trim(),wk=String(card?.key||'').trim(),ws=String(card?.s||'').trim(),wr=String(card?.r||'').trim();let i=-1;if(wid)i=p.hand.findIndex(c=>String(c.id)===wid);if(i<0&&wk)i=p.hand.findIndex(c=>String(c.key)===wk);if(i<0&&ws&&wr)i=p.hand.findIndex(c=>c.s===ws&&c.r===wr);if(i<0)return'Nie mam takiej karty w tej ręce.';const played=p.hand[i],lead=r.trick[0]?.card.s;if(lead&&p.hand.some(c=>c.s===lead)&&played.s!==lead)return'Musisz dołożyć do koloru.';p.hand.splice(i,1);r.trick.push({player:id,card:played});if(r.trick.length<r.players.length){r.currentPlayer=next(r,id);send(r);return null}const win=trickWinner(r),wp=findPlayer(r,win);if(wp)wp.won++;r.currentPlayer=win;const completed=r.trick;send(r);setTimeout(()=>{if(!rooms.has(r.code)||r.trick!==completed)return;r.trick=[];if(r.players.every(x=>x.hand.length===0))finishRound(r);else send(r)},1500);return null}
+function finishRound(r){for(const p of r.players){p.roundPoints=p.won===p.decl?10+p.won:-Math.abs(p.decl-p.won)*10;p.score+=p.roundPoints}r.phase='roundEnd';send(r);setTimeout(()=>{if(!rooms.has(r.code))return;r.round++;r.dealerIndex=(r.dealerIndex+1)%r.players.length;startRound(r)},1800)}
+async function createPlayer(name,token,avatar){let account=null;try{account=await getUserFromToken(token)}catch{}return{id:crypto.randomUUID(),token,name:cleanName(name||account?.username),avatar:cleanAvatar(avatar||account?.avatar),accountId:account?.id||null,accountUsername:account?.username||null,equippedDeck:account?.equipped_deck||'classic',score:0,hand:[],decl:null,won:0,roundPoints:0,connected:false,socketId:null,socketRoom:null}}
 
 io.on('connection',socket=>{
-  socket.on('resume',({code,token}={})=>{const roomCode=String(code||'').trim().toUpperCase(),stableToken=cleanToken(token),room=rooms.get(roomCode);if(!room||!stableToken)return;const pl=findPlayerByToken(room,stableToken);if(!pl)return;attachSocket(socket,room,pl);socket.emit('resumed',room.code);send(room);});
-  socket.on('createRoom',({name,token,avatar}={})=>{const stableToken=cleanToken(token)||crypto.randomUUID(),code=newCode(),room={code,players:[],phase:'lobby',round:1,maxRounds:0,handSize:0,trump:null,currentPlayer:null,currentDeclarer:null,dealerIndex:0,deck:[],trick:[]},pl=createPlayer(name,stableToken,avatar);pl.socketRoom=`room:${code}`;room.players.push(pl);rooms.set(code,room);attachSocket(socket,room,pl);socket.emit('roomCreated',code);send(room);});
-  socket.on('joinRoom',({code,name,token,avatar}={})=>{const roomCode=String(code||'').trim().toUpperCase(),stableToken=cleanToken(token)||crypto.randomUUID(),room=rooms.get(roomCode);if(!room)return socket.emit('errorMsg','Nie znaleziono pokoju.');const existing=findPlayerByToken(room,stableToken);if(existing){existing.name=cleanName(name);existing.avatar=cleanAvatar(avatar);attachSocket(socket,room,existing);socket.emit('roomJoined',room.code);send(room);return;}if(room.players.length>=4)return socket.emit('errorMsg','Pokój jest pełny — maksymalnie 4 graczy.');const pl=createPlayer(name,stableToken,avatar);pl.socketRoom=`room:${room.code}`;room.players.push(pl);attachSocket(socket,room,pl);socket.emit('roomJoined',room.code);send(room);});
-  socket.on('startGame',()=>{const room=rooms.get(socket.data.room),playerId=socket.data.playerId;if(!room||!playerId)return;if(room.players[0]?.id!==playerId)return socket.emit('errorMsg','Tylko twórca pokoju może rozpocząć.');if(room.players.length<2)return socket.emit('errorMsg','Potrzeba co najmniej 2 graczy.');room.maxRounds=maxHandSize(room.players.length);room.round=1;room.dealerIndex=0;room.players.forEach(x=>{x.score=0;});startRound(room);});
-  socket.on('declare',amount=>{const room=rooms.get(socket.data.room),playerId=socket.data.playerId;if(!room||!playerId)return;const error=declare(room,playerId,amount);if(error){socket.emit('errorMsg',error);send(room);}});
-  socket.on('play',card=>{const room=rooms.get(socket.data.room),playerId=socket.data.playerId;if(!room||!playerId)return;const error=play(room,playerId,card);if(error){socket.emit('errorMsg',error);send(room);}});
-  socket.on('requestState',()=>{const room=rooms.get(socket.data.room),playerId=socket.data.playerId;if(!room||!playerId)return;const pl=findPlayer(room,playerId);if(!pl)return;pl.socketId=socket.id;pl.connected=true;send(room);});
-  socket.on('disconnect',()=>{const room=rooms.get(socket.data.room),playerId=socket.data.playerId;if(!room||!playerId)return;const pl=findPlayer(room,playerId);if(!pl)return;if(pl.socketId===socket.id){pl.connected=false;pl.socketId=null;}send(room);});
+ socket.on('resume',async({code,token}={})=>{const rc=String(code||'').trim().toUpperCase(),t=cleanToken(token),r=rooms.get(rc);if(!r||!t)return;const p=findPlayerByToken(r,t);if(!p)return;attach(socket,r,p);try{const u=await getUserFromToken(t);if(u){p.accountId=u.id;p.accountUsername=u.username;p.avatar=u.avatar;p.equippedDeck=u.equipped_deck||'classic'}}catch{}socket.emit('resumed',r.code);send(r)});
+ socket.on('createRoom',async({name,token,avatar}={})=>{const t=cleanToken(token)||crypto.randomUUID(),code=newCode(),r={code,players:[],phase:'lobby',round:1,maxRounds:0,handSize:0,trump:null,currentPlayer:null,currentDeclarer:null,dealerIndex:0,deck:[],trick:[]},p=await createPlayer(name,t,avatar);p.socketRoom=`room:${code}`;r.players.push(p);rooms.set(code,r);attach(socket,r,p);socket.emit('roomCreated',code);send(r)});
+ socket.on('joinRoom',async({code,name,token,avatar}={})=>{const rc=String(code||'').trim().toUpperCase(),t=cleanToken(token)||crypto.randomUUID(),r=rooms.get(rc);if(!r)return socket.emit('errorMsg','Nie znaleziono pokoju.');const ex=findPlayerByToken(r,t);if(ex){ex.name=cleanName(name||ex.name);ex.avatar=cleanAvatar(avatar||ex.avatar);attach(socket,r,ex);try{const u=await getUserFromToken(t);if(u){ex.accountId=u.id;ex.accountUsername=u.username;ex.equippedDeck=u.equipped_deck||'classic'}}catch{}socket.emit('roomJoined',r.code);send(r);return}if(r.players.length>=4)return socket.emit('errorMsg','Pokój jest pełny — maksymalnie 4 graczy.');const p=await createPlayer(name,t,avatar);p.socketRoom=`room:${r.code}`;r.players.push(p);attach(socket,r,p);socket.emit('roomJoined',r.code);send(r)});
+ socket.on('startGame',()=>{const r=rooms.get(socket.data.room),id=socket.data.playerId;if(!r||!id)return;if(r.players[0]?.id!==id)return socket.emit('errorMsg','Tylko twórca pokoju może rozpocząć.');if(r.players.length<2)return socket.emit('errorMsg','Potrzeba co najmniej 2 graczy.');r.maxRounds=maxHandSize(r.players.length);r.round=1;r.dealerIndex=0;r.players.forEach(p=>p.score=0);startRound(r)});
+ socket.on('declare',amount=>{const r=rooms.get(socket.data.room),id=socket.data.playerId;if(!r||!id)return;const e=declare(r,id,amount);if(e){socket.emit('errorMsg',e);send(r)}});
+ socket.on('play',card=>{const r=rooms.get(socket.data.room),id=socket.data.playerId;if(!r||!id)return;const e=play(r,id,card);if(e){socket.emit('errorMsg',e);send(r)}});
+ socket.on('requestState',()=>{const r=rooms.get(socket.data.room),id=socket.data.playerId;if(!r||!id)return;const p=findPlayer(r,id);if(!p)return;p.socketId=socket.id;p.connected=true;send(r)});
+ socket.on('disconnect',()=>{const r=rooms.get(socket.data.room),id=socket.data.playerId;if(!r||!id)return;const p=findPlayer(r,id);if(!p)return;if(p.socketId===socket.id){p.connected=false;p.socketId=null}send(r)});
 });
 
 const PORT=process.env.PORT||3000;
-initDatabase().then(()=>server.listen(PORT,()=>console.log(`Planowanie server listening on ${PORT}`))).catch(err=>{console.error('DATABASE START ERROR:',err);server.listen(PORT,()=>console.log(`Planowanie server listening on ${PORT} (database error)`));});
+initDatabase().then(()=>server.listen(PORT,()=>console.log(`Planowanie server listening on ${PORT}`))).catch(e=>{console.error('DATABASE START ERROR:',e);server.listen(PORT,()=>console.log(`Planowanie server listening on ${PORT} (database error)`))});
