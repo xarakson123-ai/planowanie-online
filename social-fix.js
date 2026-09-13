@@ -1,6 +1,11 @@
 (function(){
   async function boot(){
     try{if(window.PlanowanieSocial?.api){const me=await window.PlanowanieSocial.api('/api/me');window.__planowanieMyAccountId=me.user.id}}catch{}
+    document.addEventListener('click',function(e){
+      const b=e.target.closest&&e.target.closest('.equip');
+      if(!b)return;
+      setTimeout(()=>{const s=window.planowanieSocket,code=localStorage.getItem('planowanieRoom'),t=localStorage.getItem('planowaniePlayerToken');if(s&&code&&t)s.emit('resume',{code,token:t})},500);
+    },true);
     document.addEventListener('click',async function(e){
       const b=e.target.closest&&e.target.closest('.chatFriend');
       if(!b)return;
