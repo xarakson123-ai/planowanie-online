@@ -5,4 +5,5 @@ document.write('<script src="enhancements.js"><\/script>');
 document.write('<script src="fix-v10.js"><\/script>');
 document.write('<script src="stake-ui.js"><\/script>');
 document.write('<script src="profile-photo-ui.js"><\/script>');
+document.write('<script src="score-v10.js"><\/script>');
 (function(){window.addEventListener('load',function(){document.body.style.pointerEvents='auto';document.querySelectorAll('.uiModal,.v8Overlay').forEach(function(e){e.remove()});})})();
