@@ -1,0 +1,1 @@
+process.env.PUBLIC_PORT=process.env.PORT||'3000';require('./server_v12');
