@@ -2,27 +2,24 @@ const http=require('http');
 const express=require('express');
 const {Server}=require('socket.io');
 const crypto=require('crypto');
-const {Pool}=require('pg');
 const app=express();
 const server=http.createServer(app);
 const io=new Server(server,{cors:{origin:'*',methods:['GET','POST']}});
 const rooms=new Map();
 const users=new Map();
 const sessions=new Map();
-const db=process.env.DATABASE_URL?new Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.DATABASE_URL.includes('localhost')?false:{rejectUnauthorized:false}}):null;
-const dbReady=(async()=>{if(!db){console.log('DATABASE_URL not set - using temporary memory accounts');return}await db.query(`CREATE TABLE IF NOT EXISTS users (username_key TEXT PRIMARY KEY, username TEXT NOT NULL, salt TEXT, hash TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS username_key TEXT`);await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS salt TEXT`);await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS hash TEXT`);await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);await db.query(`UPDATE users SET username_key=LOWER(username) WHERE username_key IS NULL OR username_key=''`);await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_username_key_idx ON users(username_key)`);const r=await db.query('SELECT username_key,username,salt,hash FROM users WHERE username IS NOT NULL AND username_key IS NOT NULL');for(const u of r.rows)users.set(u.username_key,{username:u.username,salt:u.salt,hash:u.hash});console.log('Loaded '+r.rows.length+' accounts from PostgreSQL')})().catch(e=>{console.error('PostgreSQL init failed:',e.message);if(process.env.DATABASE_URL)console.error('Accounts cannot be persisted until DATABASE_URL is fixed.')});
 const SUITS=['♣','♦','♥','♠'];
 const RANKS=['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
 const value=r=>RANKS.indexOf(r);
 const clean=x=>String(x||'').trim().slice(0,18);
 function passwordHash(password,salt){return crypto.scryptSync(password,salt,64).toString('hex')}
 function makePassword(password){const salt=crypto.randomBytes(16).toString('hex');return {salt,hash:passwordHash(password,salt)}}
-function checkPassword(password,u){try{if(!u?.salt||!u?.hash)return false;return crypto.timingSafeEqual(Buffer.from(passwordHash(password,u.salt),'hex'),Buffer.from(u.hash,'hex'))}catch(e){return false}}
+function checkPassword(password,u){try{return crypto.timingSafeEqual(Buffer.from(passwordHash(password,u.salt),'hex'),Buffer.from(u.hash,'hex'))}catch(e){return false}}
 function authUser(req){const h=String(req.headers.authorization||'');const token=h.startsWith('Bearer ')?h.slice(7):'';const username=sessions.get(token);return username?users.get(username):null}
 function issueSession(username){const token=crypto.randomBytes(32).toString('hex');sessions.set(token,username);return token}
 app.use(express.json());
-app.post('/auth/register',async(req,res)=>{await dbReady;const username=clean(req.body?.username);const password=String(req.body?.password||'');const key=username.toLowerCase();if(username.length<3)return res.status(400).json({error:'Nazwa użytkownika musi mieć co najmniej 3 znaki.'});if(!/^[a-zA-Z0-9_ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+$/.test(username))return res.status(400).json({error:'Nazwa może zawierać tylko litery, cyfry i _.'});if(password.length<6)return res.status(400).json({error:'Hasło musi mieć co najmniej 6 znaków.'});if(users.has(key))return res.status(409).json({error:'Taki użytkownik już istnieje.'});const ph=makePassword(password);try{if(db)await db.query('INSERT INTO users(username_key,username,salt,hash) VALUES($1,$2,$3,$4)',[key,username,ph.salt,ph.hash]);}catch(e){if(e.code==='23505')return res.status(409).json({error:'Taki użytkownik już istnieje.'});console.error('Register DB error:',e.message);return res.status(500).json({error:'Nie udało się zapisać konta.'})}users.set(key,{username,salt:ph.salt,hash:ph.hash});const token=issueSession(key);res.json({ok:true,token,username})});
-app.post('/auth/login',async(req,res)=>{await dbReady;const username=clean(req.body?.username);const password=String(req.body?.password||'');const key=username.toLowerCase();const u=users.get(key);if(!u||!checkPassword(password,u))return res.status(401).json({error:'Nieprawidłowy login lub hasło.'});res.json({ok:true,token:issueSession(key),username:u.username})});
+app.post('/auth/register',(req,res)=>{const username=clean(req.body?.username);const password=String(req.body?.password||'');const key=username.toLowerCase();if(username.length<3)return res.status(400).json({error:'Nazwa użytkownika musi mieć co najmniej 3 znaki.'});if(!/^[a-zA-Z0-9_ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+$/.test(username))return res.status(400).json({error:'Nazwa może zawierać tylko litery, cyfry i _.'});if(password.length<6)return res.status(400).json({error:'Hasło musi mieć co najmniej 6 znaków.'});if(users.has(key))return res.status(409).json({error:'Taki użytkownik już istnieje.'});const ph=makePassword(password);users.set(key,{username,salt:ph.salt,hash:ph.hash});const u=users.get(key);const token=issueSession(key);res.json({ok:true,token,username:u.username})});
+app.post('/auth/login',(req,res)=>{const username=clean(req.body?.username);const password=String(req.body?.password||'');const key=username.toLowerCase();const u=users.get(key);if(!u||!checkPassword(password,u))return res.status(401).json({error:'Nieprawidłowy login lub hasło.'});res.json({ok:true,token:issueSession(key),username:u.username})});
 app.get('/auth/me',(req,res)=>{const u=authUser(req);if(!u)return res.status(401).json({error:'Sesja wygasła.'});res.json({ok:true,username:u.username})});
 app.post('/auth/logout',(req,res)=>{const h=String(req.headers.authorization||'');const token=h.startsWith('Bearer ')?h.slice(7):'';sessions.delete(token);res.json({ok:true})});
 function deck(){return SUITS.flatMap(s=>RANKS.map(r=>({id:crypto.randomUUID(),key:s+'|'+r,s,r})))}
