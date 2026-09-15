@@ -1,2 +1,7 @@
 window.PLANOWANIE_SERVER='https://planowanie-server.onrender.com';
-document.write('<script src="auth.js"><\/script>');
+(function(){
+  const s=document.createElement('script');
+  s.src='auth.js';
+  s.defer=true;
+  document.head.appendChild(s);
+})();
