@@ -6,10 +6,22 @@ const app=express();
 const server=http.createServer(app);
 const io=new Server(server,{cors:{origin:'*',methods:['GET','POST']}});
 const rooms=new Map();
+const users=new Map();
+const sessions=new Map();
 const SUITS=['♣','♦','♥','♠'];
 const RANKS=['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
 const value=r=>RANKS.indexOf(r);
 const clean=x=>String(x||'').trim().slice(0,18);
+function passwordHash(password,salt){return crypto.scryptSync(password,salt,64).toString('hex')}
+function makePassword(password){const salt=crypto.randomBytes(16).toString('hex');return {salt,hash:passwordHash(password,salt)}}
+function checkPassword(password,u){try{return crypto.timingSafeEqual(Buffer.from(passwordHash(password,u.salt),'hex'),Buffer.from(u.hash,'hex'))}catch(e){return false}}
+function authUser(req){const h=String(req.headers.authorization||'');const token=h.startsWith('Bearer ')?h.slice(7):'';const username=sessions.get(token);return username?users.get(username):null}
+function issueSession(username){const token=crypto.randomBytes(32).toString('hex');sessions.set(token,username);return token}
+app.use(express.json());
+app.post('/auth/register',(req,res)=>{const username=clean(req.body?.username);const password=String(req.body?.password||'');const key=username.toLowerCase();if(username.length<3)return res.status(400).json({error:'Nazwa użytkownika musi mieć co najmniej 3 znaki.'});if(!/^[a-zA-Z0-9_ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+$/.test(username))return res.status(400).json({error:'Nazwa może zawierać tylko litery, cyfry i _.'});if(password.length<6)return res.status(400).json({error:'Hasło musi mieć co najmniej 6 znaków.'});if(users.has(key))return res.status(409).json({error:'Taki użytkownik już istnieje.'});const ph=makePassword(password);users.set(key,{username,salt:ph.salt,hash:ph.hash});const u=users.get(key);const token=issueSession(key);res.json({ok:true,token,username:u.username})});
+app.post('/auth/login',(req,res)=>{const username=clean(req.body?.username);const password=String(req.body?.password||'');const key=username.toLowerCase();const u=users.get(key);if(!u||!checkPassword(password,u))return res.status(401).json({error:'Nieprawidłowy login lub hasło.'});res.json({ok:true,token:issueSession(key),username:u.username})});
+app.get('/auth/me',(req,res)=>{const u=authUser(req);if(!u)return res.status(401).json({error:'Sesja wygasła.'});res.json({ok:true,username:u.username})});
+app.post('/auth/logout',(req,res)=>{const h=String(req.headers.authorization||'');const token=h.startsWith('Bearer ')?h.slice(7):'';sessions.delete(token);res.json({ok:true})});
 function deck(){return SUITS.flatMap(s=>RANKS.map(r=>({id:crypto.randomUUID(),key:s+'|'+r,s,r})))}
 function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
 function sortHand(h){const so={'♣':0,'♦':1,'♥':2,'♠':3};h.sort((a,b)=>value(a.r)-value(b.r)||(so[a.s]-so[b.s]))}
@@ -23,10 +35,10 @@ function startRound(r){r.round++;if(r.round>r.maxRounds)return finish(r);r.phase
 function begin(r){r.maxRounds=7;r.round=0;r.dealer=0;for(const p of r.players){p.score=0;p.ready=true}startRound(r)}
 function finishRound(r){for(const p of r.players)p.score+=(p.won===p.decl?10+p.won:0);r.phase='roundEnd';send(r);setTimeout(()=>{if(rooms.has(r.code)){r.dealer=(r.dealer+1)%r.players.length;startRound(r)}},1400)}
 function finish(r){r.phase='finished';send(r)}
-app.get('/health',(req,res)=>res.json({ok:true,rooms:rooms.size}));
+function socketUser(socket){const token=String(socket.handshake.auth?.token||'');const key=sessions.get(token);return key?users.get(key):null}
 io.on('connection',socket=>{
- socket.on('createRoom',x=>{const p={id:crypto.randomUUID(),name:clean(x?.name)||'Gracz',avatar:x?.avatar||'😀',score:0,hand:[],decl:null,won:0,connected:true,socket:socket.id,ready:true};const r={code:crypto.randomBytes(3).toString('hex').toUpperCase(),players:[p],phase:'lobby',round:0,maxRounds:0,handSize:0,trump:null,currentPlayer:null,currentDeclarer:null,currentTrumpChooser:null,dealer:0,trick:[]};rooms.set(r.code,r);socket.data={room:r.code,player:p.id};socket.join('room:'+r.code);socket.emit('roomCreated',r.code);send(r)});
- socket.on('joinRoom',x=>{const r=rooms.get(String(x?.code||'').toUpperCase());if(!r)return socket.emit('errorMsg','Nie znaleziono pokoju.');if(r.phase!=='lobby'||r.players.length>=4)return socket.emit('errorMsg','Pokój jest pełny lub gra już trwa.');const p={id:crypto.randomUUID(),name:clean(x?.name)||'Gracz',avatar:x?.avatar||'😀',score:0,hand:[],decl:null,won:0,connected:true,socket:socket.id,ready:true};r.players.push(p);socket.data={room:r.code,player:p.id};socket.join('room:'+r.code);socket.emit('roomJoined',r.code);send(r)});
+ socket.on('createRoom',x=>{const u=socketUser(socket);if(!u)return socket.emit('errorMsg','Zaloguj się, aby utworzyć pokój.');const p={id:crypto.randomUUID(),name:u.username,avatar:x?.avatar||'😀',score:0,hand:[],decl:null,won:0,connected:true,socket:socket.id,ready:true};const r={code:crypto.randomBytes(3).toString('hex').toUpperCase(),players:[p],phase:'lobby',round:0,maxRounds:0,handSize:0,trump:null,currentPlayer:null,currentDeclarer:null,currentTrumpChooser:null,dealer:0,trick:[]};rooms.set(r.code,r);socket.data={room:r.code,player:p.id};socket.join('room:'+r.code);socket.emit('roomCreated',r.code);send(r)});
+ socket.on('joinRoom',x=>{const u=socketUser(socket);if(!u)return socket.emit('errorMsg','Zaloguj się, aby dołączyć do pokoju.');const r=rooms.get(String(x?.code||'').toUpperCase());if(!r)return socket.emit('errorMsg','Nie znaleziono pokoju.');if(r.phase!=='lobby'||r.players.length>=4)return socket.emit('errorMsg','Pokój jest pełny lub gra już trwa.');const p={id:crypto.randomUUID(),name:u.username,avatar:x?.avatar||'😀',score:0,hand:[],decl:null,won:0,connected:true,socket:socket.id,ready:true};r.players.push(p);socket.data={room:r.code,player:p.id};socket.join('room:'+r.code);socket.emit('roomJoined',r.code);send(r)});
  socket.on('startGame',()=>{const r=rooms.get(socket.data.room),p=find(r,socket.data.player);if(!r||!p)return;if(r.players[0].id!==p.id)return socket.emit('errorMsg','Tylko twórca pokoju może rozpocząć.');if(r.players.length<2)return socket.emit('errorMsg','Potrzebujesz co najmniej 2 graczy.');begin(r)});
  socket.on('chooseTrump',s=>{const r=rooms.get(socket.data.room);if(!r||r.phase!=='trump'||r.currentTrumpChooser!==socket.data.player)return;if(!SUITS.includes(s))return;r.trump=s;r.phase='declaration';r.currentDeclarer=r.currentTrumpChooser;send(r)});
  socket.on('declare',n=>{const r=rooms.get(socket.data.room),p=find(r,socket.data.player);if(!r||!p||r.phase!=='declaration'||r.currentDeclarer!==p.id)return;n=Number(n);if(!Number.isInteger(n)||n<0||n>r.handSize)return;p.decl=n;const i=r.players.indexOf(p);if(i===r.players.length-1){r.phase='play';r.currentPlayer=r.players[(r.dealer+1)%r.players.length].id}else r.currentDeclarer=r.players[i+1].id;send(r)});
