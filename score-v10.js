@@ -1,1 +1,0 @@
-(function(){function css(){const s=document.createElement('style');s.textContent='@media(min-width:1051px){.gameBottom{grid-template-columns:minmax(0,1fr) minmax(620px,1.35fr)!important}}.paper{overflow-x:auto}.paper table{white-space:nowrap}';document.head.appendChild(s)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',css);else css()})();
