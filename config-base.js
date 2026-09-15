@@ -1,7 +1,7 @@
-window.PLANOWANIE_SERVER='https://planowanie-server.onrender.com';
+window.PLANOWANIE_SERVER='https://planowanie-server-v12-clean2.onrender.com';
 /* Klient Socket.IO jest ładowany z Render jako awaryjne źródło, gdyby CDN nie zadziałał. */
 if(typeof window.io!=='function'){
-  document.write('<script src="https://planowanie-server.onrender.com/socket.io/socket.io.js"><\/script>');
+  document.write('<script src="https://planowanie-server-v12-clean2.onrender.com/socket.io/socket.io.js"><\/script>');
 }
 (function(){
   const realIO=window.io;
